@@ -1,28 +1,26 @@
-; Six OUT pins carry the RGB bits for two rows. Side-set drives CLK.
-; One FIFO word contains two columns, with the first column in the low bits.
+// Clock two columns out of each word. Each column has RGB for the top and bottom rows.
 .program hub75_columns
 .side_set 1
 .wrap_target
-    set x, 31          side 0
+    set x, 31          side 0 // Run 32 times for 64 columns.
 next_pair:
     pull block         side 0
     out pins, 6        side 0
-    nop                side 1
+    nop                side 1 // CLK rises after the data pins are set.
     out pins, 6        side 0
     nop                side 1
     jmp x-- next_pair  side 0
-    irq set 0 rel      side 0
+    irq set 0 rel      side 0 // Tell C the whole row pair is shifted in.
 .wrap
 
-; OUT pins select the row pair. Side-set bit 0 is LAT and bit 1 is active-low OE.
-; The FIFO word holds the row in bits 0-3 and the on-time in bits 4-31.
+// Side-set bit 0 goes to LAT and bit 1 goes to OE.
 .program hub75_row
 .side_set 2
 .wrap_target
-    pull block        side 2 ; Stay blank while waiting for another row.
-    out pins, 4       side 2
-    out x, 28         side 3
+    pull block        side 2 // OE high keeps the panel blank while we wait.
+    out pins, 4       side 2 // Set A-D from the low four bits.
+    out x, 28         side 3 // Pulse LAT and load the brightness countdown.
 lit:
-    jmp x-- lit       side 0
-    irq set 0 rel     side 2
+    jmp x-- lit       side 0 // OE low lights this pair for X + 1 cycles.
+    irq set 0 rel     side 2 // Blank before the next row and signal done.
 .wrap
