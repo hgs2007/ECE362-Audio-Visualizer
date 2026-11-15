@@ -11,11 +11,11 @@ enum {
     RGB_MATRIX_BLUE = 1 << 2,
 };
 
-typedef struct {
+struct RgbMatrixFrame {
     uint8_t pixels[RGB_MATRIX_HEIGHT][RGB_MATRIX_WIDTH]; // [row][column], 0 = off, low 3 bits = RGB
-} RgbMatrixFrame;
+};
 
 void rgb_matrix_init(void);
-void rgb_matrix_refresh(const RgbMatrixFrame *frame);
+void rgb_matrix_refresh(const struct RgbMatrixFrame *frame);
 
 #endif

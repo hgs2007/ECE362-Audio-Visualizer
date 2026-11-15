@@ -13,12 +13,13 @@ enum {
     LCD_LINE_2 = 0xc0,
 };
 
+// Send one 9-bit SPI word like in Lab 6. Bit 8 marks a character.
 static void lcd_send(uint16_t word)
 {
-    // Same 9-bit command/data format as the LCD in Lab 6.
     spi_write16_blocking(spi1, &word, 1);
 }
 
+// Set up SPI and send the startup commands for the two-line LCD.
 void lcd_init(void)
 {
     spi_init(spi1, LCD_SPI_HZ);
@@ -38,16 +39,22 @@ void lcd_init(void)
     sleep_us(40);
 }
 
+// Move the cursor to the start of a line and fill all 16 spaces.
 static void lcd_write_line(uint16_t cursor_command, const char *text)
 {
     lcd_send(cursor_command);
-    for (unsigned x = 0; x < LCD_COLUMNS; ++x) {
+    for (int x = 0; x < LCD_COLUMNS; ++x) {
         // Fill the rest with spaces to erase letters from a longer previous value.
-        char ch = *text ? *text++ : ' ';
+        char ch = ' ';
+        if (*text != '\0') {
+            ch = *text;
+            text++;
+        }
         lcd_send(LCD_DATA_BIT | (uint8_t)ch);
     }
 }
 
+// Replace both LCD lines with the latest button labels and choices.
 void lcd_show_lines(const char *top, const char *bottom)
 {
     lcd_write_line(LCD_LINE_1, top);

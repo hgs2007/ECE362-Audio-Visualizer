@@ -21,10 +21,11 @@ enum {
     COLUMN_PHASES = 4,
 };
 
-static uint columns_sm;
-static uint row_sm;
-static unsigned column_phase;
+static int columns_sm;
+static int row_sm;
+static int column_phase;
 
+// Set up the panel pins and start the two PIO state machines.
 void rgb_matrix_init(void)
 {
     // OE is active-low. Keep the panel blank while we set the pins up.
@@ -60,10 +61,12 @@ void rgb_matrix_init(void)
     hard_assert(pio_sm_init(pio0, row_sm, row_offset, &row_config) == PICO_OK);
     hard_assert(pio_sm_set_consecutive_pindirs(pio0, row_sm, ROW_BASE_GPIO,
                                               ROW_PIN_COUNT + 2, true) == PICO_OK);
-    pio_sm_set_pins_with_mask64(pio0, row_sm, 1ull << OE_GPIO,
-                                (1ull << OE_GPIO) | (1ull << LATCH_GPIO));
+    // OE and LAT are above GP31, so these masks need 64 bits.
+    uint64_t oe_mask = UINT64_C(1) << OE_GPIO;
+    uint64_t latch_mask = UINT64_C(1) << LATCH_GPIO;
+    pio_sm_set_pins_with_mask64(pio0, row_sm, oe_mask, oe_mask | latch_mask);
 
-    for (uint pin = RGB_BASE_GPIO; pin <= OE_GPIO; ++pin) {
+    for (int pin = RGB_BASE_GPIO; pin <= OE_GPIO; ++pin) {
         pio_gpio_init(pio0, pin);
     }
     pio_interrupt_clear(pio0, columns_sm);
@@ -72,7 +75,8 @@ void rgb_matrix_init(void)
     pio_sm_set_enabled(pio0, row_sm, true);
 }
 
-static void wait_for_state_machine(uint sm)
+// Wait for the PIO program to signal that it's done, then clear the flag for next time.
+static void wait_for_state_machine(int sm)
 {
     while (!pio_interrupt_get(pio0, sm)) {
         tight_loop_contents();
@@ -80,7 +84,8 @@ static void wait_for_state_machine(uint sm)
     pio_interrupt_clear(pio0, sm);
 }
 
-static uint32_t column_bits(unsigned x, unsigned row, const RgbMatrixFrame *frame)
+// Pack the upper and lower pixels into the six bits that go to the panel for this column.
+static uint32_t column_bits(int x, int row, const struct RgbMatrixFrame *frame)
 {
     // Light every fourth column this pass to limit current. Change the offset next pass.
     if (x % COLUMN_PHASES != column_phase) {
@@ -92,11 +97,11 @@ static uint32_t column_bits(unsigned x, unsigned row, const RgbMatrixFrame *fram
     return upper | (lower << RGB_BITS_PER_PIXEL);
 }
 
-void rgb_matrix_refresh(const RgbMatrixFrame *frame)
+// Shift and light all 16 row pairs once, like scanning the display in Lab 3.
+void rgb_matrix_refresh(const struct RgbMatrixFrame *frame)
 {
-    // Same idea as the multiplexed display in Lab 3. Scan it over and over.
-    for (unsigned row = 0; row < ROW_PAIRS; ++row) {
-        for (unsigned x = 0; x < RGB_MATRIX_WIDTH; x += 2) {
+    for (int row = 0; row < ROW_PAIRS; ++row) {
+        for (int x = 0; x < RGB_MATRIX_WIDTH; x += 2) {
             // First column goes in bits 0-5 and the second in bits 6-11.
             uint32_t pair = column_bits(x, row, frame) |
                             (column_bits(x + 1, row, frame) << RGB_PIN_COUNT);
@@ -105,7 +110,7 @@ void rgb_matrix_refresh(const RgbMatrixFrame *frame)
         wait_for_state_machine(columns_sm); // Wait for the last CLK pulse before latching.
 
         // Low four bits pick the rows. The rest set how long OE stays low, like a PWM pulse.
-        uint32_t row_command = ((ROW_ON_CYCLES - 1u) << ROW_PIN_COUNT) | row;
+        uint32_t row_command = ((uint32_t)(ROW_ON_CYCLES - 1) << ROW_PIN_COUNT) | (uint32_t)row;
         pio_sm_put_blocking(pio0, row_sm, row_command);
         wait_for_state_machine(row_sm);
     }

@@ -9,7 +9,7 @@ enum {
 };
 
 void spectrum_init(void);
-void spectrum_measure(const uint16_t samples[SPECTRUM_SAMPLE_COUNT], unsigned mean,
+void spectrum_measure(const uint16_t samples[SPECTRUM_SAMPLE_COUNT], int mean,
                       float amplitudes[SPECTRUM_BAR_COUNT]);
 
 #endif

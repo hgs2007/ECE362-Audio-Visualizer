@@ -13,6 +13,7 @@ next_pair:
     irq set 0 rel      side 0 // Tell C the whole row pair is shifted in.
 .wrap
 
+// Pick the row pair, latch the pixels, and light them briefly.
 // Side-set bit 0 goes to LAT and bit 1 goes to OE.
 .program rgb_matrix_row
 .side_set 2
