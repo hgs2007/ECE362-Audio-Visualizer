@@ -28,11 +28,14 @@ The MAX4466 sends an analog voltage to GP40, which is ADC channel 0. The 12-bit 
 
 `finish_audio_block()` pauses the ADC once DMA has filled the array, finds the average, draws the next frame, and starts another capture. The waveform uses one of every four samples to fill the 64 columns. Subtracting the average puts quiet input at the middle of the screen. The difference tells us how far up or down to draw each dot.
 
-### FFT and Band Mix
+### Frequency bars and Band Mix
 
-In [`spectrum.c`](src/spectrum.c), `spectrum_measure()` subtracts the average and applies a Hann window. The window fades the ends of the block to reduce the extra frequency content caused by cutting the signal off at the block edges. The FFT keeps splitting the samples into even and odd groups until each group is one sample. It combines the smaller results using sine and cosine weights to account for their timing.
+The FFT takes 256 readings ordered by time and tells us how strong different frequencies are in that block. [`spectrum.c`](src/spectrum.c) uses two arrays, `fft_real` and `fft_imag`. After the FFT, they hold the cosine and sine parts of each frequency bin.
 
-The output has frequency bins spaced `16000 / 256 = 62.5 Hz` apart. A 1 kHz tone is at bin 16. `bin_edges` groups the bins into 16 bars. Inside each group, the code compares `real² + imag²` and takes the square root of the biggest result to get that bar's amplitude.
+1. **Get the samples ready.** `spectrum_measure()` subtracts the average and applies a Hann window. The window fades the ends of the block so a sharp cutoff spreads less of a note into nearby bins. The starting samples go into `fft_real`, and `fft_imag` starts at zero. [Hann window formula](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.hann.html)
+2. **Put the samples in the order the loops expect.** `reverse_bits()` reverses the binary digits of each index. With four samples, `00 01 10 11` becomes `00 10 01 11`, so the samples are arranged `0, 2, 1, 3`. The first pass can work on the even and odd pairs side by side. The code figures out this order once at boot and stores it in `sample_order`. [FFT diagram and bit order](https://www.dspguide.com/CH12.PDF#page=4)
+3. **Combine small groups into bigger ones.** `run_fft()` starts with groups of 2, then doubles the group size through 4, 8, and up to 256. For each pair, it uses the sine and cosine table to adjust the phase of the right half before taking the sum and difference. Those become the two results for the pair. This is the operation called a butterfly. There are eight passes of 128 pairs. The shorter transforms get reused across bins, which is why the FFT is a good fit when we need the whole spectrum. [Cooley and Tukey's FFT paper](https://www.cs.jhu.edu/~misha/ReadingSeminar/Papers/Cooley65.pdf)
+4. **Turn the bins into bars.** Each bin is `16000 / 256 = 62.5 Hz` apart. A 1 kHz tone is at bin 16. `bin_edges` groups the bins into 16 bars. We compare `real * real + imag * imag` inside each group, then take the square root of the biggest result to get its magnitude. The `4 / 256` scale accounts for the FFT block size, the Hann window, and using only the positive-frequency side.
 
 Band Mix takes the strongest value in each of the three ranges. A range adds its color if it's above the noise floor and at least half as strong as the loudest range. We can turn on multiple LED channels with a bitwise OR.
 
@@ -44,6 +47,6 @@ Band Mix takes the strongest value in each of the three ranges. A range adds its
 
 ### LCD and EEPROM
 
-[`lcd.c`](src/lcd.c) uses SPI1 and the same 9-bit format as the Lab 6 LCD. Bit 8 tells the LCD whether the word is a command or a character. The code sends a command to move to the start of a line, then writes the characters and pads the line with spaces.
+[`lcd.c`](src/lcd.c) uses SPI1 with nine bits per transfer. Bit 8 tells the LCD whether the word is a command or a character. The code sends a command to move to the start of a line, then writes the characters and pads the line with spaces.
 
 [`eeprom.c`](src/eeprom.c) talks to the EEPROM over I2C0 at device address `0x50`. Inside the chip, byte `0` stores the view and byte `2` stores the color. In `main.c`, `show_spectrum` and `band_mix_on` are two true/false variables that control what gets drawn. Each button writes its own byte, waits 5 ms, and reads the byte back. The board flips the variable after the readback matches. At startup it reads the saved bytes and uses Waveform and RGB as the defaults for blank or invalid values.
