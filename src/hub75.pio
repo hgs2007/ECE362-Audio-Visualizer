@@ -1,0 +1,28 @@
+; Six OUT pins carry the RGB bits for two rows. Side-set drives CLK.
+; One FIFO word contains two columns, with the first column in the low bits.
+.program hub75_columns
+.side_set 1
+.wrap_target
+    set x, 31          side 0
+next_pair:
+    pull block         side 0
+    out pins, 6        side 0
+    nop                side 1
+    out pins, 6        side 0
+    nop                side 1
+    jmp x-- next_pair  side 0
+    irq set 0 rel      side 0
+.wrap
+
+; OUT pins select the row pair. Side-set bit 0 is LAT and bit 1 is active-low OE.
+; The FIFO word holds the row in bits 0-3 and the on-time in bits 4-31.
+.program hub75_row
+.side_set 2
+.wrap_target
+    pull block        side 2 ; Stay blank while waiting for another row.
+    out pins, 4       side 2
+    out x, 28         side 3
+lit:
+    jmp x-- lit       side 0
+    irq set 0 rel     side 2
+.wrap
