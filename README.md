@@ -1,56 +1,49 @@
-# Proton audio visualizer
+# ECE 362 Audio Visualizer
 
-## First test on the Proton
+## Buttons
 
-Open this folder in VS Code with the PlatformIO extension. In the PlatformIO terminal, run the following with the Proton debugger connected. The **Build**, **Upload**, and **Monitor** buttons in PlatformIO do the same thing. [Purdue Proton setup guide](https://github.com/ece362-purdue/proton-labs/blob/main/lab0-intro/README.md)
+- Press **21** to switch between **Waveform** and **Spectrum**.
+- Press **26** to switch between **RGB** and **Band Mix**. The LCD calls Band Mix `Mix`.
 
-```text
-pio run -e proton
-pio run -e proton -t upload
-pio device monitor -b 115200
-```
-
-1. Look for the red user LED to blink and `mic GP40` readings to repeat in the serial monitor. `MIC_GPIO` in `src/main.c` is set to GP40 to match the MAX4466 output in the wiring handoff. [Purdue ADC lab](https://github.com/ece362-purdue/proton-labs/blob/main/lab4-adc-dma/README.md)
-2. Speak close to the mic and compare `peak_to_peak` with the quiet reading. It should rise when you speak. Repeated readings near `min=0` or `max=4095` during loud sounds suggest clipping. The ADC captures 256 samples at 16 kHz per block.
-
-## LCD controls
-
-The SMH1602-J LCD uses SPI1 with CSB on GP13, SCK on GP14, and SDA on GP15. The LCD should be in SPI mode with the SPI pads bridged and the IIC pads open. The code uses the 9-bit format from Lab 6, with bit 8 marking text data. [Lab 6 LCD setup](https://github.com/ece362-purdue/proton-labs/blob/main/lab6-spi/README.md#step-5-use-spi-to-communicate-with-lcdoled-display)
+The LCD shows both choices. For example, this means the matrix is drawing the waveform in Band Mix colors.
 
 ```text
 21 View:Waveform
 26 Color:Mix
 ```
 
-The LCD shows both choices all the time. Press **21** to switch between Waveform and Spectrum. Press **26** to switch between RGB and Band Mix. `Mix` on the LCD means Band Mix.
+The board saves both choices and loads them the next time it powers on.
 
-Waveform is the trace over time. Spectrum is the frequency bars. `RGB` uses red for bass, green for mids, and blue for treble. In Waveform, RGB uses blue near the center, green farther out, and red at the peaks.
+## What the matrix shows
 
-`Band Mix` uses the strongest FFT bin in each of the three bands. A band lights its RGB channel if it's above the noise floor and at least half as strong as the loudest band. For example, strong bass and mids turn on red and green together to make yellow. The resulting color applies to the current waveform or set of bars.
+- **Waveform** plots the mic signal over time. Quiet input looks like a line near the center. When the sound gets louder, the trace moves farther above and below the center. With RGB colors, the center is blue, the next range is green, and the peaks are red.
+- **Spectrum** has 16 bars. Low frequencies are on the left and high frequencies are on the right. A taller bar means a stronger frequency in that range. RGB colors mark bass in red, mids in green, and treble in blue. Try playing a 250 Hz tone and then a 4 kHz tone near the mic to see the tallest bar move right.
+- **Band Mix** colors the whole trace or set of bars with a blend based on the sound. Bass adds red, mids add green, and treble adds blue. Strong bass and mids together make yellow.
 
-## Test saving settings
+## How it works
 
-The EEPROM uses I2C0 on GP4 (SDA) and GP5 (SCL) at address `0x50`. Bytes `0` and `2` hold the view and color. The defaults are Waveform and RGB. Earlier Waveform, Spectrum, RGB, and Band Mix values still load. The old GBR and BRG values fall back to RGB.
+### Mic and DMA
 
-1. Upload the firmware. Press **21** to select Spectrum and **26** to select Mix. Each press should change just one line on the LCD. The `m` shortcut in Monitor also switches views.
-2. Fully power off the Proton and EEPROM, then power them back on. Check that the LCD still shows Spectrum and Mix.
+The MAX4466 sends an analog voltage to GP40, which is ADC channel 0. The 12-bit ADC turns that voltage into a number from 0 to 4095. The mic output sits around half its supply voltage when the room is quiet, so silence is around 2048. In [`mic_init()`](src/main.c), the ADC takes 16,000 samples per second and puts them in the FIFO. Each sample triggers a DMA request. DMA reads the same FIFO register each time and writes to the next slot in `audio_samples` until it has 256 readings, which takes 16 ms.
 
-## Show a live waveform
+`finish_audio_block()` pauses the ADC once DMA has filled the array, finds the average, draws the next frame, and starts another capture. The waveform uses one of every four samples to fill the 64 columns. Subtracting the average puts quiet input at the middle of the screen. The difference tells us how far up or down to draw each dot.
 
-1. Connect the ribbon to the matrix’s **INPUT** connector. The firmware uses GP27–GP32 for `R1 G1 B1 R2 G2 B2`, GP33 for `CLK`, GP34–GP37 for `A B C D`, GP38 for `LAT`, and GP39 for `OE`. Use regulated 5 V panel power and a common ground with the Proton. Adafruit rates the panel for up to 4 A. [Adafruit #2276](https://www.adafruit.com/product/2276) · [Adafruit connector guide](https://learn.adafruit.com/32x16-32x32-rgb-led-matrix/new-wiring)
-2. Upload the firmware and press **21** if needed to choose Waveform.
-3. In a quiet room, look for a dim line near the center. Play a steady 440 Hz tone and look for the dots to move above and below the center and change color as they reach farther from it.
+### FFT and Band Mix
 
-The ADC fills a 256-sample block using DMA. `src/main.c` subtracts the block mean and converts one of every four samples into a vertical position. `src/hub75.pio` clocks out the pixels and pulses output enable for each of the 16 row pairs. Each scan lights one quarter of the columns to limit simultaneous LEDs. [Pico SDK ADC and DMA example](https://github.com/raspberrypi/pico-examples/tree/master/adc/dma_capture) · [Pico SDK HUB75 example](https://github.com/raspberrypi/pico-examples/tree/master/pio/hub75)
+In [`spectrum.c`](src/spectrum.c), `spectrum_measure()` subtracts the average and applies a Hann window. The window fades the ends of the block to reduce the extra frequency content caused by cutting the signal off at the block edges. The FFT keeps splitting the samples into even and odd groups until each group is one sample. It combines the smaller results using sine and cosine weights to account for their timing.
 
-## Show frequency bars
+The output has frequency bins spaced `16000 / 256 = 62.5 Hz` apart. A 1 kHz tone is at bin 16. `bin_edges` groups the bins into 16 bars. Inside each group, the code compares `real² + imag²` and takes the square root of the biggest result to get that bar's amplitude.
 
-Press **21** if needed to choose Spectrum. With the `RGB` palette, the left four bars are red for bass, the middle eight are green for mids, and the right four are blue for treble. Play pure tones at **250 Hz**, **1 kHz**, and **4 kHz**, one at a time. The tallest bar should move from left to right as the tone gets higher. The bars rise as the sound gets louder. Quiet input can leave the display dark.
+Band Mix takes the strongest value in each of the three ranges. A range adds its color if it's above the noise floor and at least half as strong as the loudest range. We can turn on multiple LED channels with a bitwise OR.
 
-Follow one block through the code for checkoff:
+### RGB matrix and PIO
 
-1. In `src/main.c`, `mic_init()` starts the 16 kHz ADC and configures DMA to copy 256 samples into memory. `finish_audio_block()` finds the average so both modes can subtract the mic's DC voltage offset.
-2. In `src/spectrum.c`, `spectrum_measure()` tapers the ends of the block with a Hann window, then runs the FFT. The FFT splits the data into even and odd samples and combines their frequency results. Each bin is 62.5 Hz apart. `bin_edges` groups the bins into 16 bars, and each bar uses the strongest bin in its range. [Hann window definition](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.windows.hann.html)
-3. In `src/main.c`, `draw_spectrum()` scales those 16 amplitudes to heights from 0 to 32 pixels. `src/hub75.c` refreshes the same pixel buffer for Waveform and Spectrum.
+[`rgb_matrix.c`](src/rgb_matrix.c) reads a 32×64 array of pixels. Each pixel has a bit for red, green, and blue. The HUB75 panel scans two rows at once, so row address 0 lights rows 0 and 16. For each column, the C code packs the three color bits for the upper row and the three for the lower row into six bits.
 
-4. `src/lcd.c` sends the two lines of menu text over SPI. `src/settings.c` writes and verifies one EEPROM byte when a value changes.
+[`rgb_matrix.pio`](src/rgb_matrix.pio) has two state machines. One shifts those bits into the panel and clocks out 64 columns. The other sets the row address, pulses `LAT` to latch the shifted pixels, and pulls `OE` low for 20 µs to light the rows. It blanks them again before the next pair. The code repeats this for all 16 row pairs. It lights every fourth column on each pass and changes the starting column on the next pass to limit how many LEDs are on at once.
+
+### LCD and EEPROM
+
+[`lcd.c`](src/lcd.c) uses SPI1 and the same 9-bit format as the Lab 6 LCD. Bit 8 tells the LCD whether the word is a command or a character. The code sends a command to move to the start of a line, then writes the characters and pads the line with spaces.
+
+[`settings.c`](src/settings.c) talks to the EEPROM over I2C0 at device address `0x50`. Inside the chip, byte `0` stores the view and byte `2` stores the color. A button press writes the address and one value, waits 5 ms for the write, and reads the byte back. The board applies the change after the readback matches. At startup it reads the saved bytes and uses Waveform and RGB as the defaults for blank or invalid values.

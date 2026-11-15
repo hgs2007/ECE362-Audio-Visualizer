@@ -1,9 +1,9 @@
-#include "hub75.h"
+#include "rgb_matrix.h"
 
 #include "hardware/clocks.h"
 #include "hardware/pio.h"
 #include "pico/stdlib.h"
-#include "hub75.pio.h"
+#include "rgb_matrix.pio.h"
 
 enum {
     RGB_BASE_GPIO = 27,
@@ -16,7 +16,7 @@ enum {
     GPIO_BASE = 16,
     PIO_CLOCK_HZ = 2000000,
     ROW_ON_CYCLES = 40, // 20 us at the PIO clock rate.
-    ROW_PAIRS = HUB75_HEIGHT / 2,
+    ROW_PAIRS = RGB_MATRIX_HEIGHT / 2,
     RGB_BITS_PER_PIXEL = 3,
     COLUMN_PHASES = 4,
 };
@@ -25,7 +25,7 @@ static uint columns_sm;
 static uint row_sm;
 static unsigned column_phase;
 
-void hub75_init(void)
+void rgb_matrix_init(void)
 {
     // OE is active-low. Keep the panel blank while we set the pins up.
     gpio_init(OE_GPIO);
@@ -36,13 +36,13 @@ void hub75_init(void)
     hard_assert(pio_set_gpio_base(pio0, GPIO_BASE) == PICO_OK);
     columns_sm = pio_claim_unused_sm(pio0, true);
     row_sm = pio_claim_unused_sm(pio0, true);
-    int columns_offset = pio_add_program(pio0, &hub75_columns_program);
-    int row_offset = pio_add_program(pio0, &hub75_row_program);
+    int columns_offset = pio_add_program(pio0, &rgb_matrix_columns_program);
+    int row_offset = pio_add_program(pio0, &rgb_matrix_row_program);
     hard_assert(columns_offset >= 0 && row_offset >= 0);
     float clock_divider = (float)clock_get_hz(clk_sys) / PIO_CLOCK_HZ;
 
     // Like the PIO part of Lab 6, data goes out through OUT and side-set drives CLK.
-    pio_sm_config columns_config = hub75_columns_program_get_default_config(columns_offset);
+    pio_sm_config columns_config = rgb_matrix_columns_program_get_default_config(columns_offset);
     sm_config_set_out_pins(&columns_config, RGB_BASE_GPIO, RGB_PIN_COUNT);
     sm_config_set_sideset_pins(&columns_config, CLOCK_GPIO);
     sm_config_set_out_shift(&columns_config, true, false, 32); // Low bits first, manual pull.
@@ -52,7 +52,7 @@ void hub75_init(void)
                                               RGB_PIN_COUNT + 1, true) == PICO_OK);
 
     // The other state machine sets A-D, pulses LAT, and turns the row pair on briefly.
-    pio_sm_config row_config = hub75_row_program_get_default_config(row_offset);
+    pio_sm_config row_config = rgb_matrix_row_program_get_default_config(row_offset);
     sm_config_set_out_pins(&row_config, ROW_BASE_GPIO, ROW_PIN_COUNT);
     sm_config_set_sideset_pins(&row_config, LATCH_GPIO);
     sm_config_set_out_shift(&row_config, true, false, 32);
@@ -80,7 +80,7 @@ static void wait_for_state_machine(uint sm)
     pio_interrupt_clear(pio0, sm);
 }
 
-static uint32_t column_bits(unsigned x, unsigned row, const Hub75Frame *frame)
+static uint32_t column_bits(unsigned x, unsigned row, const RgbMatrixFrame *frame)
 {
     // Light every fourth column this pass to limit current. Change the offset next pass.
     if (x % COLUMN_PHASES != column_phase) {
@@ -92,11 +92,11 @@ static uint32_t column_bits(unsigned x, unsigned row, const Hub75Frame *frame)
     return upper | (lower << RGB_BITS_PER_PIXEL);
 }
 
-void hub75_refresh(const Hub75Frame *frame)
+void rgb_matrix_refresh(const RgbMatrixFrame *frame)
 {
     // Same idea as the multiplexed display in Lab 3. Scan it over and over.
     for (unsigned row = 0; row < ROW_PAIRS; ++row) {
-        for (unsigned x = 0; x < HUB75_WIDTH; x += 2) {
+        for (unsigned x = 0; x < RGB_MATRIX_WIDTH; x += 2) {
             // First column goes in bits 0-5 and the second in bits 6-11.
             uint32_t pair = column_bits(x, row, frame) |
                             (column_bits(x + 1, row, frame) << RGB_PIN_COUNT);

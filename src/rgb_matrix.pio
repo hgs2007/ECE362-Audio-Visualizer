@@ -1,5 +1,5 @@
 // Clock two columns out of each word. Each column has RGB for the top and bottom rows.
-.program hub75_columns
+.program rgb_matrix_columns
 .side_set 1
 .wrap_target
     set x, 31          side 0 // Run 32 times for 64 columns.
@@ -14,7 +14,7 @@ next_pair:
 .wrap
 
 // Side-set bit 0 goes to LAT and bit 1 goes to OE.
-.program hub75_row
+.program rgb_matrix_row
 .side_set 2
 .wrap_target
     pull block        side 2 // OE high keeps the panel blank while we wait.

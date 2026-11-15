@@ -5,7 +5,7 @@
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "pico/stdlib.h"
-#include "hub75.h"
+#include "rgb_matrix.h"
 #include "lcd.h"
 #include "settings.h"
 #include "spectrum.h"
@@ -20,7 +20,7 @@ enum {
     LAST_ADC_GPIO = 47,
     AUDIO_SAMPLE_RATE_HZ = 16000,
     AUDIO_BLOCK_SAMPLES = SPECTRUM_SAMPLE_COUNT,
-    SAMPLES_PER_COLUMN = AUDIO_BLOCK_SAMPLES / HUB75_WIDTH,
+    SAMPLES_PER_COLUMN = AUDIO_BLOCK_SAMPLES / RGB_MATRIX_WIDTH,
     ADC_COUNTS_PER_ROW = 32,
     SPECTRUM_NOISE_FLOOR = 6,
     SPECTRUM_COUNTS_PER_ROW = 8,
@@ -43,7 +43,7 @@ static uint audio_dma_channel;
 enum { BASS, MIDRANGE, TREBLE, BAND_COUNT };
 
 static const uint8_t band_colors[BAND_COUNT] = {
-    HUB75_RED, HUB75_GREEN, HUB75_BLUE,
+    RGB_MATRIX_RED, RGB_MATRIX_GREEN, RGB_MATRIX_BLUE,
 };
 
 static void mic_init(void)
@@ -148,52 +148,52 @@ static uint8_t mix_band_colors(const float amplitudes[SPECTRUM_BAR_COUNT])
             mixed |= band_colors[band]; // OR turns on more than one LED channel at a time.
         }
     }
-    return mixed ? mixed : HUB75_BLUE; // Keep a visible trace in a quiet room.
+    return mixed ? mixed : RGB_MATRIX_BLUE; // Keep a visible trace in a quiet room.
 }
 
-static void draw_waveform(Hub75Frame *frame, unsigned mean, uint8_t mixed)
+static void draw_waveform(RgbMatrixFrame *frame, unsigned mean, uint8_t mixed)
 {
     // Use one sample out of each group of four and center the trace at row 16.
-    for (unsigned x = 0; x < HUB75_WIDTH; ++x) {
+    for (unsigned x = 0; x < RGB_MATRIX_WIDTH; ++x) {
         int centered = (int)audio_samples[x * SAMPLES_PER_COLUMN] - (int)mean;
         int offset = centered / ADC_COUNTS_PER_ROW;
-        int row = HUB75_HEIGHT / 2 - offset; // Row 0 is at the top.
+        int row = RGB_MATRIX_HEIGHT / 2 - offset; // Row 0 is at the top.
         if (row < 0) {
             row = 0;
-        } else if (row >= HUB75_HEIGHT) {
-            row = HUB75_HEIGHT - 1;
+        } else if (row >= RGB_MATRIX_HEIGHT) {
+            row = RGB_MATRIX_HEIGHT - 1;
         }
         uint8_t color = mixed;
         if (!color) {
             // Use distance above or below the center for the three amplitude colors.
             int distance = offset < 0 ? -offset : offset;
-            color = HUB75_BLUE;
+            color = RGB_MATRIX_BLUE;
             if (distance >= WAVE_PEAK_ROWS) {
-                color = HUB75_RED;
+                color = RGB_MATRIX_RED;
             } else if (distance >= WAVE_MID_ROWS) {
-                color = HUB75_GREEN;
+                color = RGB_MATRIX_GREEN;
             }
         }
         frame->pixels[row][x] = color;
     }
 }
 
-static void draw_spectrum(Hub75Frame *frame, const float amplitudes[SPECTRUM_BAR_COUNT], uint8_t mixed)
+static void draw_spectrum(RgbMatrixFrame *frame, const float amplitudes[SPECTRUM_BAR_COUNT], uint8_t mixed)
 {
     // Each bar has three colored columns and a one-column gap.
-    const unsigned columns_per_bar = HUB75_WIDTH / SPECTRUM_BAR_COUNT;
+    const unsigned columns_per_bar = RGB_MATRIX_WIDTH / SPECTRUM_BAR_COUNT;
     for (unsigned bar = 0; bar < SPECTRUM_BAR_COUNT; ++bar) {
         float amplitude = amplitudes[bar] - SPECTRUM_NOISE_FLOOR;
         if (amplitude <= 0.0f) {
             continue;
         }
         unsigned height = (unsigned)(amplitude / SPECTRUM_COUNTS_PER_ROW);
-        if (height > HUB75_HEIGHT) {
-            height = HUB75_HEIGHT;
+        if (height > RGB_MATRIX_HEIGHT) {
+            height = RGB_MATRIX_HEIGHT;
         }
         uint8_t color = mixed ? mixed : band_colors[band_for_bar(bar)];
         unsigned first_column = bar * columns_per_bar;
-        for (unsigned row = HUB75_HEIGHT - height; row < HUB75_HEIGHT; ++row) {
+        for (unsigned row = RGB_MATRIX_HEIGHT - height; row < RGB_MATRIX_HEIGHT; ++row) {
             for (unsigned x = first_column; x < first_column + columns_per_bar - 1; ++x) {
                 frame->pixels[row][x] = color;
             }
@@ -201,7 +201,7 @@ static void draw_spectrum(Hub75Frame *frame, const float amplitudes[SPECTRUM_BAR
     }
 }
 
-static AudioStats finish_audio_block(Hub75Frame *frame, const Settings *settings)
+static AudioStats finish_audio_block(RgbMatrixFrame *frame, const Settings *settings)
 {
     // The loop already saw DMA finish. The SDK wait also makes the buffer safe to read.
     dma_channel_wait_for_finish_blocking(audio_dma_channel);
@@ -259,7 +259,7 @@ int main(void)
     gpio_init(COLOR_BUTTON_GPIO);
     gpio_set_dir(COLOR_BUTTON_GPIO, GPIO_IN);
 
-    hub75_init();
+    rgb_matrix_init();
     settings_init();
     Settings settings;
     bool restored = settings_load(&settings);
@@ -277,7 +277,7 @@ int main(void)
     bool color_was_down = gpio_get(COLOR_BUTTON_GPIO);
     bool frame_ready = false;
     AudioStats stats = {0};
-    static Hub75Frame frame; // Keep the pixel array off the stack.
+    static RgbMatrixFrame frame; // Keep the pixel array off the stack.
     absolute_time_t next_report = get_absolute_time();
     while (true) {
         bool mode_down = gpio_get(MODE_BUTTON_GPIO);
@@ -315,7 +315,7 @@ int main(void)
         }
 
         if (frame_ready) {
-            hub75_refresh(&frame);
+            rgb_matrix_refresh(&frame);
         } else {
             sleep_ms(1);
         }
