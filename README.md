@@ -45,8 +45,15 @@ Band Mix takes the strongest value in each of the three ranges. A range adds its
 
 [`rgb_matrix.pio`](src/rgb_matrix.pio) has two state machines. One shifts those bits into the panel and clocks out 64 columns. The other sets the row address, pulses `LAT` to latch the shifted pixels, and pulls `OE` low for 20 µs to light the rows. It blanks them again before the next pair. The code repeats this for all 16 row pairs. It lights every fourth column on each pass and changes the starting column on the next pass to limit how many LEDs are on at once.
 
-### LCD and EEPROM
+### LCD
 
 [`lcd.c`](src/lcd.c) uses SPI1 with nine bits per transfer. Bit 8 tells the LCD whether the word is a command or a character. The code sends a command to move to the start of a line, then writes the characters and pads the line with spaces.
 
-[`eeprom.c`](src/eeprom.c) talks to the EEPROM over I2C0 at device address `0x50`. Inside the chip, byte `0` stores the view and byte `2` stores the color. In `main.c`, `show_spectrum` and `band_mix_on` are two true/false variables that control what gets drawn. Each button writes its own byte, waits 5 ms, and reads the byte back. The board flips the variable after the readback matches. At startup it reads the saved bytes and uses Waveform and RGB as the defaults for blank or invalid values.
+### EEPROM
+
+[`eeprom.c`](src/eeprom.c) uses I2C0 at 100 kHz, with SDA on GP4 and SCL on GP5. The Pico SDK uses `0x50` to select the chip on the bus. The two address bytes sent after that select a location inside the chip. Byte `0` stores the view, and byte `2` stores the color.
+
+- **Write.** Saving Band Mix sends `00 02 03` to `0x50`. `00 02` is the memory address, and `03` is the value for Band Mix. The write ends with a STOP, which tells the chip to start saving. We check that the SDK reports all three bytes sent, wait 5 ms, then read the byte back. The display changes once the value matches.
+- **Read.** To read the color, we write just `00 02` to set the location. The write skips STOP so the read starts with a repeated START. The EEPROM returns the byte at that location. On startup we read bytes `0` through `2` in one go and use bytes `0` and `2` to restore the choices. Blank or invalid values give Waveform and RGB.
+
+To check that saving works, switch to Spectrum and Mix, power the board off and back on, and check that the LCD still shows both choices.
