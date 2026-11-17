@@ -1,26 +1,26 @@
-// The first state machine shifts the colors in, two columns per FIFO word
-.program rgb_matrix_columns         // name the C code uses to load it
-.side_set 1                         // one extra pin we can set on each step, CLK
-.wrap_target                        // start here for each new row pair
-    set x, 31           side 0      // keep CLK low and start the 32-word count
-shift_two_columns:                  // jump here for the next two columns
-    pull block          side 0      // wait for a word from C and load it into the shift register
-    out pins, 6         side 0      // put the first column's R1 G1 B1 R2 G2 B2 bits on the pins
-    nop                 side 1      // raise CLK so the panel reads those bits
-    out pins, 6         side 0      // put out the next six bits with CLK low again
-    nop                 side 1      // raise CLK to shift in the second column
+// first state machine shifts the colors in, two columns per FIFO word
+.program rgb_matrix_columns // program name for the C code
+.side_set 1 // one extra pin we can set on each step, CLK
+.wrap_target // start here for each new row pair
+    set x, 31 side 0 // keep CLK low and start the 32-word count
+shift_two_columns: // jump here for the next two columns
+    pull block side 0 // wait for a word from C and load it into the shift register
+    out pins, 6 side 0 // put the first column's R1 G1 B1 R2 G2 B2 bits on the pins
+    nop side 1 // raise CLK so the panel reads those bits
+    out pins, 6 side 0 // put out the next six bits with CLK low again
+    nop side 1 // raise CLK to shift in the second column
     jmp x-- shift_two_columns side 0 // go back if X was nonzero and decrement X
-    irq set 0 rel       side 0      // set this machine's done flag after all 64 columns
-.wrap                               // go back to the start and wait for more pixels
+    irq set 0 rel side 0 // set this machine's done flag after all 64 columns
+.wrap // go back to the start and wait for more pixels
 
-// The second state machine shows the pixels we just shifted in
-.program rgb_matrix_row             // name the C code uses for row timing
-.side_set 2                         // bit 0 controls LAT and bit 1 controls OE
-.wrap_target                        // start here each time we show a row pair
-    pull block          side 2      // wait for C with LAT low and OE high so the LEDs stay dark
-    out pins, 4         side 2      // send the low four bits to A-D to choose the row pair
-    out x, 28           side 3      // load the timer from the rest of the word and raise LAT
-row_on:                             // LAT goes low as the lit time starts
-    jmp x-- row_on      side 0      // OE low turns the rows on for X + 1 cycles
-    irq set 0 rel       side 2      // OE high blanks the rows and the flag tells C we're done
-.wrap                               // wait for the next row while keeping the display blank
+// second state machine to show the pixels we just shifted in
+.program rgb_matrix_row // name the C code uses for row timing
+.side_set 2 // bit 0 controls LAT and bit 1 controls OE
+.wrap_target // start here each time we show a row pair
+    pull block side 2 // wait for C with LAT low and OE high so the LEDs stay dark
+    out pins, 4 side 2 // send the low four bits to A-D to choose the row pair
+    out x, 28 side 3 // load the timer from the rest of the word and raise LAT
+row_on: // start the countdown for this row pair
+    jmp x-- row_on side 0 // hold OE and LAT low for X + 1 cycles so the rows light up
+    irq set 0 rel side 2 // raise OE to blank the rows and tell C we're done
+.wrap // wait for the next row while keeping the display blank
