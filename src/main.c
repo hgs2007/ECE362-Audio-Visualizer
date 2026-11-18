@@ -1,4 +1,4 @@
-#include <stdio.h> // printf and snprintf for the serial logs and LCD text
+#include <stdio.h> 
 
 #include "hardware/adc.h"
 #include "hardware/clocks.h"

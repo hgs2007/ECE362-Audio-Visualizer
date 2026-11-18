@@ -6,7 +6,7 @@
 
 #define RGB_MATRIX_WIDTH 64
 #define RGB_MATRIX_HEIGHT 32
-// each pixel has three on/off switches, OR the bits to turn on multiple colors
+// on/off switches for each matrix 
 #define RGB_MATRIX_RED (1 << 0)
 #define RGB_MATRIX_GREEN (1 << 1)
 #define RGB_MATRIX_BLUE (1 << 2)
