@@ -6,15 +6,16 @@
 
 #define RGB_MATRIX_WIDTH 64
 #define RGB_MATRIX_HEIGHT 32
+// each pixel has three on/off switches, OR the bits to turn on multiple colors
 #define RGB_MATRIX_RED (1 << 0)
 #define RGB_MATRIX_GREEN (1 << 1)
 #define RGB_MATRIX_BLUE (1 << 2)
 
-struct RgbMatrixFrame {
-    uint8_t pixels[RGB_MATRIX_HEIGHT][RGB_MATRIX_WIDTH]; // three RGB bits per pixel, zero is off
-};
-
+// set up the pins and PIO, return false if setup fails
 bool rgb_matrix_init(void);
-void rgb_matrix_refresh(const struct RgbMatrixFrame *frame);
+
+// read one picture as pixels[row][column] and send it to the panel
+// the width tells C how many entries to skip to reach the next row
+void rgb_matrix_refresh(uint8_t pixels[][RGB_MATRIX_WIDTH]);
 
 #endif

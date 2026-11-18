@@ -1,26 +1,32 @@
-// first state machine shifts the colors in, two columns per FIFO word
+// the PIO runs these small programs to drive the panel pins while C sends data
+// the first program sends color bits, the second one lights the selected rows
 .program rgb_matrix_columns // program name for the C code
-.side_set 1 // one extra pin we can set on each step, CLK
-.wrap_target // start here for each new row pair
-    set x, 31 side 0 // keep CLK low and start the 32-word count
-shift_two_columns: // jump here for the next two columns
-    pull block side 0 // wait for a word from C and load it into the shift register
-    out pins, 6 side 0 // put the first column's R1 G1 B1 R2 G2 B2 bits on the pins
-    nop side 1 // raise CLK so the panel reads those bits
-    out pins, 6 side 0 // put out the next six bits with CLK low again
-    nop side 1 // raise CLK to shift in the second column
-    jmp x-- shift_two_columns side 0 // go back if X was nonzero and decrement X
-    irq set 0 rel side 0 // set this machine's done flag after all 64 columns
-.wrap // go back to the start and wait for more pixels
+.side_set 1 // side 0 drives CLK low, side 1 drives it high
+.wrap_target // the program comes back here after it finishes a row pair
+    set x, 31 side 0 // x is our counter, 31 down to 0 gives us 32 loops
+shift_two_columns: // name for the spot we jump back to
+    // each word from C has two columns, so 32 loops send all 64 columns
+    pull block side 0 // wait for C to put a word in the FIFO, the queue of words to send
+    out pins, 6 side 0 // put the first column's RGB bits on the pins, three for each row
+    nop side 1 // keep those bits in place and raise CLK so the panel reads them
+    out pins, 6 side 0 // drop CLK and put the second column's bits on the pins
+    nop side 1 // raise CLK again so the panel reads the second column
+    jmp x-- shift_two_columns side 0 // subtract 1 from x and jump back if it was above zero
+    irq set 0 rel side 0 // set the flag C waits for once all 64 columns are in
+.wrap // go back to .wrap_target to send the next row pair
 
-// second state machine to show the pixels we just shifted in
+// one row address picks two rows, like 0 and 16 or 1 and 17
 .program rgb_matrix_row // name the C code uses for row timing
-.side_set 2 // bit 0 controls LAT and bit 1 controls OE
-.wrap_target // start here each time we show a row pair
-    pull block side 2 // wait for C with LAT low and OE high so the LEDs stay dark
-    out pins, 4 side 2 // send the low four bits to A-D to choose the row pair
-    out x, 28 side 3 // load the timer from the rest of the word and raise LAT
-row_on: // start the countdown for this row pair
-    jmp x-- row_on side 0 // hold OE and LAT low for X + 1 cycles so the rows light up
-    irq set 0 rel side 2 // raise OE to blank the rows and tell C we're done
-.wrap // wait for the next row while keeping the display blank
+.side_set 2 // side sets two pins at once, bit 0 is LAT and bit 1 is OE
+// side 2 keeps the panel dark, side 3 latches the colors while dark, side 0 lights the rows
+.wrap_target // come back here for each pair of rows C wants to show
+    pull block side 2 // wait for C's word with LAT low and OE high so the LEDs stay off
+    out pins, 4 side 2 // put the first 4 bits on A-D, the pins that pick which rows light up
+    out x, 28 side 3 // save the wait time in x and raise LAT to latch the new colors
+
+// with 39 from C in x, the next instruction runs for 39, 38, and so on down to 0
+// that keeps the selected LEDs on for 40 PIO cycles at half a microsecond each
+row_on: // this label is where the loop jumps back to
+    jmp x-- row_on side 0 // pull LAT and OE low to light the rows, then loop while x counts down
+    irq set 0 rel side 2 // raise OE to turn the rows off and set the done flag for C
+.wrap // go back and wait for C to send the next row word

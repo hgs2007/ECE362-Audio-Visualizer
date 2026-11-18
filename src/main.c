@@ -1,5 +1,4 @@
-#include <stdio.h>
-#include <string.h>
+#include <stdio.h> // printf and snprintf for the serial logs and LCD text
 
 #include "hardware/adc.h"
 #include "hardware/clocks.h"
@@ -10,35 +9,37 @@
 #include "lcd.h"
 #include "spectrum.h"
 
-#define AUDIO_BLOCK_SAMPLES SPECTRUM_SAMPLE_COUNT
-#define SAMPLES_PER_COLUMN (AUDIO_BLOCK_SAMPLES / RGB_MATRIX_WIDTH)
-#define BAND_COUNT 3
+#define AUDIO_BLOCK_SAMPLES SPECTRUM_SAMPLE_COUNT // both views start with the same 256 samples
+#define SAMPLES_PER_COLUMN (AUDIO_BLOCK_SAMPLES / RGB_MATRIX_WIDTH) // 256 / 64 gives a step of 4 through the samples
+#define BAND_COUNT 3 // bass, mids, treble
 
 static const int MIC_GPIO = 40; // mic output from the MAX4466
 static const int MODE_BUTTON_GPIO = 21;
 static const int COLOR_BUTTON_GPIO = 26;
 static const int STATUS_LED_GPIO = 22;
-static const int REPORT_PAUSE_MS = 250;
-static const int FIRST_ADC_GPIO = 40;
-static const int AUDIO_SAMPLE_RATE_HZ = 16000;
-static const int ADC_COUNTS_PER_ROW = 32;
-static const int SPECTRUM_NOISE_FLOOR = 6;
-static const int SPECTRUM_COUNTS_PER_ROW = 8;
-static const int ADC_MAX_COUNT = 4095;
-static const int BASS_BAR_COUNT = 4;
+static const int REPORT_PAUSE_MS = 250; // print mic stats at most four times a second
+static const int FIRST_ADC_GPIO = 40; // start counting ADC inputs at GP40
+static const int AUDIO_SAMPLE_RATE_HZ = 16000; // 256 samples at 16 kHz is 16 ms of sound
+static const int ADC_COUNTS_PER_ROW = 32; // move the waveform one row per 32 counts from center
+static const int SPECTRUM_NOISE_FLOOR = 6; // ignore small FFT readings from a quiet mic
+static const int SPECTRUM_COUNTS_PER_ROW = 8; // grow a bar by one row per 8 counts above the floor
+static const int ADC_MAX_COUNT = 4095; // 12 bits gives 4096 possible values, starting at 0
+static const int BASS_BAR_COUNT = 4; // bars 0 through 3 are bass
 static const int TREBLE_FIRST_BAR = 12; // bars are numbered 0 to 15
-static const int WAVE_MID_ROWS = 3;
-static const int WAVE_PEAK_ROWS = 8;
+static const int WAVE_MID_ROWS = 3; // switch from blue to green this far from center
+static const int WAVE_PEAK_ROWS = 8; // switch from green to red this far from center
 
-struct AudioStats {
-    int min;
-    int max;
-    int mean;
-};
+// these arrays stay around between calls and are only used in this file
+static uint16_t audio_samples[AUDIO_BLOCK_SAMPLES]; // holds the 12-bit mic readings from DMA
+static uint8_t pixels[RGB_MATRIX_HEIGHT][RGB_MATRIX_WIDTH]; // our picture, indexed by row then column
+static int audio_dma_channel; // channel number the SDK gives us
 
-static uint16_t audio_samples[AUDIO_BLOCK_SAMPLES];
-static int audio_dma_channel;
+// keep the stats from the last full block for the serial log
+static int audio_min;
+static int audio_max;
+static int audio_mean;
 
+// use these numbers as indexes into the peak and color arrays
 static const int BASS = 0;
 static const int MIDRANGE = 1;
 static const int TREBLE = 2;
@@ -50,8 +51,8 @@ static const uint8_t band_colors[BAND_COUNT] = {
 // set up the mic ADC and let DMA fill the sample array
 static void mic_init(void)
 {
-    adc_init();
-    adc_gpio_init(MIC_GPIO);
+    adc_init(); // power up the ADC
+    adc_gpio_init(MIC_GPIO); // set GP40 up for analog input
     // since ADC channels start at gp40, it's channel 0
     adc_select_input(MIC_GPIO - FIRST_ADC_GPIO);
     adc_fifo_setup(true, // put samples in the FIFO
@@ -60,19 +61,21 @@ static void mic_init(void)
                    false, // leave out the error bit
                    false); // keep all 12 bits
 
-    // the ADC waits divider + 1 clock cycles between samples
+    // at 48 MHz, 48000000 / 16000 gives 3000 ADC clocks per sample
+    // the hardware uses divider + 1, so we send 2999 in that case
     adc_set_clkdiv((float)clock_get_hz(clk_adc) / AUDIO_SAMPLE_RATE_HZ - 1.0f);
 
     // one DMA transfer per sample
-    audio_dma_channel = dma_claim_unused_channel(true);
-    dma_channel_config config = dma_channel_get_default_config(audio_dma_channel);
-    channel_config_set_transfer_data_size(&config, DMA_SIZE_16); // 12 bits fit in a halfword
+    audio_dma_channel = dma_claim_unused_channel(true); // reserve a channel for the mic
+    dma_channel_config config = dma_channel_get_default_config(audio_dma_channel); // start with the SDK defaults
+    channel_config_set_transfer_data_size(&config, DMA_SIZE_16); // each array slot holds 16 bits
     channel_config_set_read_increment(&config, false); // always read the same FIFO register
     channel_config_set_write_increment(&config, true); // write to the next spot in the array
-    channel_config_set_dreq(&config, DREQ_ADC);
+    channel_config_set_dreq(&config, DREQ_ADC); // wait for an ADC request before copying each sample
+    // give DMA the destination, the source register, and the number of samples to copy
     dma_channel_configure(audio_dma_channel, &config, audio_samples, &adc_hw->fifo,
-                          AUDIO_BLOCK_SAMPLES, true);
-    adc_run(true);
+                          AUDIO_BLOCK_SAMPLES, true); // arm DMA now so it's ready for the first sample
+    adc_run(true); // start making ADC samples
 }
 
 // view name for the LCD and serial output
@@ -90,19 +93,21 @@ static const char *color_name(bool band_mix_on)
 // put the button numbers and current choices on the LCD
 static void show_controls(bool show_spectrum, bool band_mix_on)
 {
-    char top[LCD_COLUMNS + 1];
-    snprintf(top, sizeof(top), "21 View:%s", mode_name(show_spectrum));
-    const char *bottom = band_mix_on ? "26 Color:Mix" : "26 Color:RGB";
+    char top[LCD_COLUMNS + 1]; // one extra byte for the null at the end of the string
+    snprintf(top, sizeof(top), "21 View:%s", mode_name(show_spectrum)); // limit the text to the array size
+    const char *bottom = band_mix_on ? "26 Color:Mix" : "26 Color:RGB"; // keep Band Mix short on the LCD
     lcd_show_lines(top, bottom);
 }
 
 // first 4 bars are bass, next 8 are mids, last 4 are treble
 static int band_for_bar(int bar)
 {
-    if (bar < BASS_BAR_COUNT) {
+    if(bar < BASS_BAR_COUNT)
+    {
         return BASS;
     }
-    if (bar >= TREBLE_FIRST_BAR) {
+    if(bar >= TREBLE_FIRST_BAR)
+    {
         return TREBLE;
     }
     return MIDRANGE;
@@ -111,130 +116,200 @@ static int band_for_bar(int bar)
 // use the tallest bar in each band to decide which colors to mix
 static uint8_t mix_band_colors(const float amplitudes[SPECTRUM_BAR_COUNT])
 {
-    float peaks[BAND_COUNT] = {0};
-    float strongest = 0.0f;
-    for (int bar = 0; bar < SPECTRUM_BAR_COUNT; ++bar) {
+    float peaks[BAND_COUNT] = {0}; // one best reading for each of the three bands
+    float strongest = 0.0f; // best reading across all 16 bars
+    for(int bar = 0; bar < SPECTRUM_BAR_COUNT; ++bar)
+    {
         int band = band_for_bar(bar);
-        if (amplitudes[bar] > peaks[band]) {
+        if(amplitudes[bar] > peaks[band])
+        {
             peaks[band] = amplitudes[bar];
         }
-        if (amplitudes[bar] > strongest) {
+        if(amplitudes[bar] > strongest)
+        {
             strongest = amplitudes[bar];
         }
     }
 
-    // add the color if the band clears the noise floor and is at least half the loudest one
+    // if the biggest peak is 40, another band needs at least 20 to join it
+    // the noise floor also stops quiet input from turning on the band colors
     uint8_t mixed = 0;
-    for (int band = 0; band < BAND_COUNT; ++band) {
-        if (peaks[band] > SPECTRUM_NOISE_FLOOR && peaks[band] >= strongest * 0.5f) {
-            mixed |= band_colors[band]; // add this color bit to the ones already on
+    for(int band = 0; band < BAND_COUNT; ++band)
+    {
+        if(peaks[band] > SPECTRUM_NOISE_FLOOR && peaks[band] >= strongest * 0.5f)
+        {
+            mixed |= band_colors[band]; // keep the old bits too, so red | green gives yellow
         }
     }
     return mixed ? mixed : RGB_MATRIX_BLUE; // use blue when it's too quiet to mix
 }
 
 // plot every fourth sample so 256 samples fit in 64 columns
-static void draw_waveform(struct RgbMatrixFrame *frame, int mean, uint8_t mixed)
+static void draw_waveform(uint8_t mixed)
 {
-    for (int x = 0; x < RGB_MATRIX_WIDTH; ++x) {
-        int centered = audio_samples[x * SAMPLES_PER_COLUMN] - mean;
-        int offset = centered / ADC_COUNTS_PER_ROW;
-        int row = RGB_MATRIX_HEIGHT / 2 - offset; // row 0 is at the top
-        // keep the peaks inside the screen
-        if (row < 0) {
+    for(int x = 0; x < RGB_MATRIX_WIDTH; ++x)
+    {
+        // columns 0, 1, 2 use samples 0, 4, 8 and so on
+        int centered = audio_samples[x * SAMPLES_PER_COLUMN] - audio_mean; // take out the average so the wave sits around zero
+        int offset = centered / ADC_COUNTS_PER_ROW; // 64 counts above average gives a 2-row offset
+        int row = RGB_MATRIX_HEIGHT / 2 - offset; // positive sound swings go up, so row 16 becomes row 14
+        // keep the row index within 0 through 31 even for loud peaks
+        if(row < 0)
+        {
             row = 0;
-        } else if (row >= RGB_MATRIX_HEIGHT) {
+        }
+        else if(row >= RGB_MATRIX_HEIGHT)
+        {
             row = RGB_MATRIX_HEIGHT - 1;
         }
-        uint8_t color = mixed;
-        if (!color) {
+        uint8_t color = mixed; // use one color for the whole trace in Band Mix
+        if(!color)
+        {
             // color depends on distance from center in RGB mode
-            int distance = offset < 0 ? -offset : offset;
+            int distance = offset < 0 ? -offset : offset; // use the same color at +3 and -3 rows
             color = RGB_MATRIX_BLUE;
-            if (distance >= WAVE_PEAK_ROWS) {
+            if(distance >= WAVE_PEAK_ROWS)
+            {
                 color = RGB_MATRIX_RED;
-            } else if (distance >= WAVE_MID_ROWS) {
+            }
+            else if(distance >= WAVE_MID_ROWS)
+            {
                 color = RGB_MATRIX_GREEN;
             }
         }
-        frame->pixels[row][x] = color;
+        pixels[row][x] = color; // light one dot in this column
     }
 }
 
 // draw the 16 frequency bars from the bottom up
-static void draw_spectrum(struct RgbMatrixFrame *frame, const float amplitudes[SPECTRUM_BAR_COUNT],
-                          uint8_t mixed)
+static void draw_spectrum(const float amplitudes[SPECTRUM_BAR_COUNT], uint8_t mixed)
 {
-    // three columns for the bar, one for the gap
+    // 64 columns / 16 bars leaves 4 columns each, including a gap
     const int columns_per_bar = RGB_MATRIX_WIDTH / SPECTRUM_BAR_COUNT;
-    for (int bar = 0; bar < SPECTRUM_BAR_COUNT; ++bar) {
-        float amplitude = amplitudes[bar] - SPECTRUM_NOISE_FLOOR;
-        if (amplitude <= 0.0f) {
-            continue;
+    for(int bar = 0; bar < SPECTRUM_BAR_COUNT; ++bar)
+    {
+        float amplitude = amplitudes[bar] - SPECTRUM_NOISE_FLOOR; // a reading of 30 leaves 24 after subtracting 6
+        if(amplitude <= 0.0f)
+        {
+            continue; // leave the bar blank when the reading is at or below the floor
         }
-        int height = (int)(amplitude / SPECTRUM_COUNTS_PER_ROW);
-        if (height > RGB_MATRIX_HEIGHT) {
-            height = RGB_MATRIX_HEIGHT;
+        int height = amplitude / SPECTRUM_COUNTS_PER_ROW; // 24 / 8 gives a 3-row bar
+        if(height > RGB_MATRIX_HEIGHT)
+        {
+            height = RGB_MATRIX_HEIGHT; // cap the bar at 32 rows
         }
-        uint8_t color = mixed ? mixed : band_colors[band_for_bar(bar)];
-        int first_column = bar * columns_per_bar;
-        for (int row = RGB_MATRIX_HEIGHT - height; row < RGB_MATRIX_HEIGHT; ++row) {
-            for (int x = first_column; x < first_column + columns_per_bar - 1; ++x) {
-                frame->pixels[row][x] = color;
+        uint8_t color = mixed ? mixed : band_colors[band_for_bar(bar)]; // use the mix if it's on, otherwise use this band's color
+        int first_column = bar * columns_per_bar; // bar 2 starts at column 8
+        // 32 - 3 starts a 3-row bar at row 29, then we fill down to row 31
+        for(int row = RGB_MATRIX_HEIGHT - height; row < RGB_MATRIX_HEIGHT; ++row)
+        {
+            // stop one column early for the gap, so bar 2 uses columns 8, 9, and 10
+            for(int x = first_column; x < first_column + columns_per_bar - 1; ++x)
+            {
+                pixels[row][x] = color;
             }
         }
     }
 }
 
-// draw the next frame from the samples we just got, then start another capture
-static struct AudioStats finish_audio_block(struct RgbMatrixFrame *frame, bool show_spectrum,
-                                            bool band_mix_on)
+// find the smallest and largest readings for the log and the average for drawing
+static void measure_audio_block(void)
 {
-    // this call makes sure the array reads happen after DMA finishes
-    dma_channel_wait_for_finish_blocking(audio_dma_channel);
-    adc_run(false);
-    adc_fifo_drain(); // toss any extra samples left in the FIFO
-
-    int min = ADC_MAX_COUNT;
-    int max = 0;
+    audio_min = ADC_MAX_COUNT; // start high so any smaller reading can replace it
+    audio_max = 0; // start low so any bigger reading can replace it
     int sum = 0;
 
-    for (int i = 0; i < AUDIO_BLOCK_SAMPLES; ++i) {
+    for(int i = 0; i < AUDIO_BLOCK_SAMPLES; ++i)
+    {
         int sample = audio_samples[i];
-        if (sample < min) {
-            min = sample;
+        if(sample < audio_min)
+        {
+            audio_min = sample;
         }
-        if (sample > max) {
-            max = sample;
+        if(sample > audio_max)
+        {
+            audio_max = sample;
         }
-        sum += sample;
+        sum += sample; // add this sample to the total for the average
     }
-    int mean = sum / AUDIO_BLOCK_SAMPLES; // use the block average as the center line
+    audio_mean = sum / AUDIO_BLOCK_SAMPLES; // average voltage in ADC counts, used as our zero
+}
 
-    memset(frame, 0, sizeof(*frame));
-    float amplitudes[SPECTRUM_BAR_COUNT];
-    // only run the FFT for the bars or Band Mix
-    if (show_spectrum || band_mix_on) {
-        spectrum_measure(audio_samples, mean, amplitudes);
+// clear the old dots and bars before drawing again
+static void clear_frame(void)
+{
+    for(int row = 0; row < RGB_MATRIX_HEIGHT; ++row)
+    {
+        for(int x = 0; x < RGB_MATRIX_WIDTH; ++x)
+        {
+            pixels[row][x] = 0; // all three color bits off
+        }
     }
-    uint8_t mixed = band_mix_on ? mix_band_colors(amplitudes) : 0;
-    if (show_spectrum) {
-        draw_spectrum(frame, amplitudes, mixed);
-    } else {
-        draw_waveform(frame, mean, mixed);
+}
+
+// use the samples we just got, then start another capture
+static void finish_audio_block(bool show_spectrum, bool band_mix_on)
+{
+    // wait before reading the array so we have the full block from DMA
+    dma_channel_wait_for_finish_blocking(audio_dma_channel);
+    adc_run(false); // stop sampling while we use this block
+    adc_fifo_drain(); // toss anything left in the queue so the next block starts fresh
+
+    measure_audio_block();
+    clear_frame();
+    float amplitudes[SPECTRUM_BAR_COUNT]; // one strength value for each of the 16 bars
+    // regular RGB waveform only needs the samples, Band Mix also needs their frequencies
+    if(show_spectrum || band_mix_on)
+    {
+        spectrum_measure(audio_samples, audio_mean, amplitudes);
+    }
+    uint8_t mixed = band_mix_on ? mix_band_colors(amplitudes) : 0; // zero tells the drawing code to use regular RGB
+    if(show_spectrum)
+    {
+        draw_spectrum(amplitudes, mixed);
+    }
+    else
+    {
+        draw_waveform(mixed);
     }
 
-    // start filling the same array from the top again
+    // set DMA back to the start of the array before turning the ADC back on
     dma_channel_transfer_to_buffer_now(audio_dma_channel, audio_samples, AUDIO_BLOCK_SAMPLES);
     adc_run(true);
-    return (struct AudioStats){.min = min, .max = max, .mean = mean};
 }
 
 // print the sample range so we can see if the mic is picking up sound
-static void report_mic_level(struct AudioStats stats, bool show_spectrum)
+static void report_mic_level(bool show_spectrum)
 {
+    // peak to peak spans the whole wave, from the lowest sample to the highest
     printf("mic GP%d: min=%d max=%d mean=%d peak_to_peak=%d mode=%s\n",
-           MIC_GPIO, stats.min, stats.max, stats.mean, stats.max - stats.min, mode_name(show_spectrum));
+           MIC_GPIO, audio_min, audio_max, audio_mean, audio_max - audio_min, mode_name(show_spectrum));
+}
+
+// save the opposite view and hand the new choice back to the main loop
+static bool switch_view(bool show_spectrum)
+{
+    bool next_view = !show_spectrum; // true is Spectrum and false is Waveform
+    if(eeprom_save_view(next_view))
+    {
+        printf("Saved %s to EEPROM.\n", mode_name(next_view));
+        return next_view;
+    }
+    puts("Could not save the view to EEPROM at 0x50.");
+    return show_spectrum; // keep the old choice if the save failed
+}
+
+// same idea as switching views, but this writes the color slot
+static bool switch_color(bool band_mix_on)
+{
+    bool next_color = !band_mix_on; // true is Band Mix and false is RGB
+    if(eeprom_save_color(next_color))
+    {
+        printf("Saved %s to EEPROM.\n", color_name(next_color));
+        return next_color;
+    }
+    puts("Could not save the color to EEPROM at 0x50.");
+    return band_mix_on;
 }
 
 // start the hardware and keep the audio, buttons, and screen running
@@ -242,88 +317,89 @@ int main(void)
 {
     stdio_init_all(); // use the debugger UART for logs and the 'm' key
     gpio_init(STATUS_LED_GPIO);
-    gpio_set_dir(STATUS_LED_GPIO, GPIO_OUT);
+    gpio_set_dir(STATUS_LED_GPIO, GPIO_OUT); // we drive the light ourselves
     gpio_init(MODE_BUTTON_GPIO);
-    gpio_set_dir(MODE_BUTTON_GPIO, GPIO_IN);
+    gpio_set_dir(MODE_BUTTON_GPIO, GPIO_IN); // the button drives this pin, we just read it
     gpio_init(COLOR_BUTTON_GPIO);
     gpio_set_dir(COLOR_BUTTON_GPIO, GPIO_IN);
 
-    if (!rgb_matrix_init()) {
+    if(!rgb_matrix_init())
+    {
         puts("Could not start the RGB matrix.");
-        return 1;
+        return 1; // stop here if PIO setup failed so we never try to send a frame
     }
     eeprom_init();
     bool show_spectrum;
     bool band_mix_on;
-    bool restored = eeprom_load_choices(&show_spectrum, &band_mix_on);
+    bool restored = eeprom_load_choices(&show_spectrum, &band_mix_on); // fill both choices and report if the view was saved
     printf("Mode: %s (%s). 21 switches view, 26 switches color.\n",
            mode_name(show_spectrum), restored ? "loaded from EEPROM" : "default");
     printf("Color: %s.\n", color_name(band_mix_on));
     lcd_init();
-    show_controls(show_spectrum, band_mix_on);
+    show_controls(show_spectrum, band_mix_on); // show the choices we started with
 
-    spectrum_init();
-    mic_init();
+    spectrum_init(); // build the FFT tables once at startup
+    mic_init(); // start filling the first sample block
 
     bool led_on = false;
+    // read the starting levels so a button held at startup doesn't count as a new press
     bool mode_was_down = gpio_get(MODE_BUTTON_GPIO);
     bool color_was_down = gpio_get(COLOR_BUTTON_GPIO);
-    bool frame_ready = false;
-    struct AudioStats stats = {0};
-    static struct RgbMatrixFrame frame; // keep the pixel array off the stack
-    absolute_time_t next_report = get_absolute_time();
-    while (true) {
+    bool frame_ready = false; // the first block is still being collected
+    absolute_time_t next_report = get_absolute_time(); // print as soon as a frame is ready
+    while(true)
+    {
         bool mode_down = gpio_get(MODE_BUTTON_GPIO);
         bool color_down = gpio_get(COLOR_BUTTON_GPIO);
-        // held buttons should only count once
+        // a press is low last time and high this time, so holding the button counts once
         bool mode_pressed = mode_down && !mode_was_down;
         bool color_pressed = color_down && !color_was_down;
-        mode_was_down = mode_down;
+        mode_was_down = mode_down; // remember these levels for the next loop
         color_was_down = color_down;
         bool serial_request = getchar_timeout_us(0) == 'm'; // check the key without waiting
 
-        bool changed = false;
-        if (mode_pressed || serial_request) {
-            // switch views once the EEPROM save checks out
-            if (eeprom_save_view(!show_spectrum)) {
-                show_spectrum = !show_spectrum;
-                changed = true;
-                printf("Saved %s to EEPROM.\n", mode_name(show_spectrum));
-            } else {
-                puts("Could not save the view to EEPROM at 0x50.");
-            }
+        // keep the old choices so we can tell which saves actually worked
+        bool old_view = show_spectrum;
+        bool old_color = band_mix_on;
+        // the 'm' key does the same thing as pressing the view button
+        if(mode_pressed || serial_request)
+        {
+            show_spectrum = switch_view(show_spectrum);
         }
-        if (color_pressed) {
-            if (eeprom_save_color(!band_mix_on)) {
-                band_mix_on = !band_mix_on;
-                changed = true;
-                printf("Saved %s to EEPROM.\n", color_name(band_mix_on));
-            } else {
-                puts("Could not save the color to EEPROM at 0x50.");
-            }
+        if(color_pressed)
+        {
+            band_mix_on = switch_color(band_mix_on);
         }
-        if (changed) {
-            frame_ready = false; // wait for a frame with the new settings
+        // leave the LCD and picture alone if neither choice changed
+        if(show_spectrum != old_view || band_mix_on != old_color)
+        {
+            frame_ready = false; // stop refreshing the picture drawn with the old choices
             show_controls(show_spectrum, band_mix_on);
         }
 
-        if (!dma_channel_is_busy(audio_dma_channel)) {
-            stats = finish_audio_block(&frame, show_spectrum, band_mix_on);
-            frame_ready = true;
+        // once all 256 sample slots are filled, DMA goes idle
+        if(!dma_channel_is_busy(audio_dma_channel))
+        {
+            finish_audio_block(show_spectrum, band_mix_on);
+            frame_ready = true; // we can scan this picture until the next block finishes
         }
 
         // leave time to refresh the matrix between serial prints
-        if (frame_ready && time_reached(next_report)) {
-            led_on = !led_on;
+        if(frame_ready && time_reached(next_report))
+        {
+            led_on = !led_on; // blink the status LED to show the loop is running
             gpio_put(STATUS_LED_GPIO, led_on);
-            report_mic_level(stats, show_spectrum);
-            next_report = make_timeout_time_ms(REPORT_PAUSE_MS);
+            report_mic_level(show_spectrum);
+            next_report = make_timeout_time_ms(REPORT_PAUSE_MS); // next print is 250 ms from now
         }
 
-        if (frame_ready) {
-            rgb_matrix_refresh(&frame);
-        } else {
-            sleep_ms(1);
+        if(frame_ready)
+        {
+            rgb_matrix_refresh(pixels); // scan the current picture again while DMA gets the next block
+        }
+        else
+        {
+            sleep_ms(1); // give DMA a little time if there's nothing to display yet
         }
     }
 }
