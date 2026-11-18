@@ -5,19 +5,19 @@
 #include "pico/stdlib.h"
 #include "rgb_matrix.pio.h"
 
-static const int RGB_BASE_GPIO = 27;
-static const int RGB_PIN_COUNT = 6; // three color pins for each of the two rows
-static const int CLOCK_GPIO = 33;
-static const int ROW_BASE_GPIO = 34;
-static const int ROW_PIN_COUNT = 4; // four address bits select one of 16 row pairs
-static const int LATCH_GPIO = 38;
-static const int OE_GPIO = 39;
-static const int GPIO_BASE = 16;
-static const int PIO_CLOCK_HZ = 2000000;
-static const int ROW_ON_CYCLES = 40; // 40 steps at 0.5 us per step is 20 us of light
-static const int ROW_PAIRS = RGB_MATRIX_HEIGHT / 2; // 32 rows split into 16 pairs
-static const int RGB_BITS_PER_PIXEL = 3; // one bit per color channel
-static const int COLUMN_PHASES = 4; // show one out of every four columns per scan
+const int RGB_BASE_GPIO = 27;
+const int RGB_PIN_COUNT = 6; // three color pins for each of the two rows
+const int CLOCK_GPIO = 33;
+const int ROW_BASE_GPIO = 34;
+const int ROW_PIN_COUNT = 4; // four address bits select one of 16 row pairs
+const int LATCH_GPIO = 38;
+const int OE_GPIO = 39;
+const int GPIO_BASE = 16;
+const int PIO_CLOCK_HZ = 2000000;
+const int ROW_ON_CYCLES = 40; // 40 steps at 0.5 us per step is 20 us of light
+const int ROW_PAIRS = RGB_MATRIX_HEIGHT / 2; // 32 rows split into 16 pairs
+const int RGB_BITS_PER_PIXEL = 3; // one bit per color channel
+const int COLUMN_PHASES = 4; // show one out of every four columns per scan
 
 static int shift_sm;
 static int row_sm;

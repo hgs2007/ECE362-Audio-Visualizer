@@ -2,7 +2,7 @@
 
 #include <math.h>
 
-static const float TWO_PI = 6.28318530718f; // a full turn in radians for sinf and cosf
+const float TWO_PI = 6.28318530718f; // a full turn in radians for sinf and cosf
 static float hann_window[SPECTRUM_SAMPLE_COUNT]; // one multiplier per sample to fade the ends
 static int sample_order[SPECTRUM_SAMPLE_COUNT]; // where to put each sample before the FFT
 static float fft_cos[SPECTRUM_SAMPLE_COUNT / 2]; // the biggest group needs rotation angles 0 through 127
@@ -14,7 +14,7 @@ static float fft_imag[SPECTRUM_SAMPLE_COUNT];
 // a bin is one frequency in the FFT, spaced 16000 / 256 = 62.5 Hz apart
 // skip bin 0 because it measures the steady voltage instead of a sound frequency
 // each bar starts at bin_edges[bar] and stops before the next edge, so the last ends at 127
-static const int bin_edges[SPECTRUM_BAR_COUNT + 1] = {
+const int bin_edges[SPECTRUM_BAR_COUNT + 1] = {
     1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 21, 27, 35, 45, 58, 77, 128,
 };
 

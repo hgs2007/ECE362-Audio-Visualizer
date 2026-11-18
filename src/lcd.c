@@ -3,13 +3,13 @@
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
 
-static const int LCD_CS_GPIO = 13;
-static const int LCD_SCK_GPIO = 14;
-static const int LCD_TX_GPIO = 15;
-static const int LCD_SPI_HZ = 10000; // clock the display at 10 kHz
-static const uint16_t LCD_DATA_BIT = 1 << 8; // the ninth bit says the low eight bits are a character
-static const uint16_t LCD_LINE_1 = 0x80; // go to text address 0x00 for the top line
-static const uint16_t LCD_LINE_2 = 0xc0; // go to text address 0x40 for the bottom line
+const int LCD_CS_GPIO = 13;
+const int LCD_SCK_GPIO = 14;
+const int LCD_TX_GPIO = 15;
+const int LCD_SPI_HZ = 10000; // clock the display at 10 kHz
+const uint16_t LCD_DATA_BIT = 1 << 8; // the ninth bit says the low eight bits are a character
+const uint16_t LCD_LINE_1 = 0x80; // go to text address 0x00 for the top line
+const uint16_t LCD_LINE_2 = 0xc0; // go to text address 0x40 for the bottom line
 
 // send one SPI word, bit 8 is 1 for a character and 0 for a command
 static void lcd_send(uint16_t word)

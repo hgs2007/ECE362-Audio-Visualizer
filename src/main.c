@@ -13,21 +13,21 @@
 #define SAMPLES_PER_COLUMN (AUDIO_BLOCK_SAMPLES / RGB_MATRIX_WIDTH) // 256 / 64 gives a step of 4 through the samples
 #define BAND_COUNT 3 // bass, mids, treble
 
-static const int MIC_GPIO = 40; // mic output from the MAX4466
-static const int SELECT_BUTTON_GPIO = 21; // picks which setting is selected
-static const int CHANGE_BUTTON_GPIO = 26; // changes the selected setting
-static const int STATUS_LED_GPIO = 22;
-static const int REPORT_PAUSE_MS = 250; // print mic stats at most four times a second
-static const int FIRST_ADC_GPIO = 40; // start counting ADC inputs at GP40
-static const int AUDIO_SAMPLE_RATE_HZ = 16000; // 256 samples at 16 kHz is 16 ms of sound
-static const int ADC_COUNTS_PER_ROW = 32; // move the waveform one row per 32 counts from center
-static const int SPECTRUM_NOISE_FLOOR = 6; // ignore small FFT readings from a quiet mic
-static const int SPECTRUM_COUNTS_PER_ROW = 8; // grow a bar by one row per 8 counts above the floor
-static const int ADC_MAX_COUNT = 4095; // 12 bits gives 4096 possible values, starting at 0
-static const int BASS_BAR_COUNT = 4; // bars 0 through 3 are bass
-static const int TREBLE_FIRST_BAR = 12; // bars are numbered 0 to 15
-static const int WAVE_MID_ROWS = 3; // switch from blue to green this far from center
-static const int WAVE_PEAK_ROWS = 8; // switch from green to red this far from center
+const int MIC_GPIO = 40; // mic output from the MAX4466
+const int SELECT_BUTTON_GPIO = 21; // picks which setting is selected
+const int CHANGE_BUTTON_GPIO = 26; // changes the selected setting
+const int STATUS_LED_GPIO = 22;
+const int REPORT_PAUSE_MS = 250; // print mic stats at most four times a second
+const int FIRST_ADC_GPIO = 40; // start counting ADC inputs at GP40
+const int AUDIO_SAMPLE_RATE_HZ = 16000; // 256 samples at 16 kHz is 16 ms of sound
+const int ADC_COUNTS_PER_ROW = 32; // move the waveform one row per 32 counts from center
+const int SPECTRUM_NOISE_FLOOR = 6; // ignore small FFT readings from a quiet mic
+const int SPECTRUM_COUNTS_PER_ROW = 8; // grow a bar by one row per 8 counts above the floor
+const int ADC_MAX_COUNT = 4095; // 12 bits gives 4096 possible values, starting at 0
+const int BASS_BAR_COUNT = 4; // bars 0 through 3 are bass
+const int TREBLE_FIRST_BAR = 12; // bars are numbered 0 to 15
+const int WAVE_MID_ROWS = 3; // switch from blue to green this far from center
+const int WAVE_PEAK_ROWS = 8; // switch from green to red this far from center
 
 // these arrays stay around between calls and are only used in this file
 static uint16_t audio_samples[AUDIO_BLOCK_SAMPLES]; // holds the 12-bit mic readings from DMA
@@ -40,9 +40,9 @@ static int audio_max;
 static int audio_mean;
 
 // use these numbers as indexes into the peak and color arrays
-static const int BASS = 0;
-static const int MIDRANGE = 1;
-static const int TREBLE = 2;
+const int BASS = 0;
+const int MIDRANGE = 1;
+const int TREBLE = 2;
 
 // the number of the selected setting is also the EEPROM byte it's saved in
 enum {
@@ -54,10 +54,10 @@ enum {
 
 // sensitivity scales how far the waveform and bars move for the same sound
 // Medium keeps the picture the way it looked before sensitivity existed
-static const float SENSITIVITY_GAINS[SENSITIVITY_LEVEL_COUNT] = {0.5f, 1.0f, 2.0f};
-static const char *const SENSITIVITY_NAMES[SENSITIVITY_LEVEL_COUNT] = {"Low", "Medium", "High"};
+const float SENSITIVITY_GAINS[SENSITIVITY_LEVEL_COUNT] = {0.5f, 1.0f, 2.0f};
+const char *const SENSITIVITY_NAMES[SENSITIVITY_LEVEL_COUNT] = {"Low", "Medium", "High"};
 
-static const uint8_t band_colors[BAND_COUNT] = {
+const uint8_t band_colors[BAND_COUNT] = {
     RGB_MATRIX_RED, RGB_MATRIX_GREEN, RGB_MATRIX_BLUE,
 };
 
