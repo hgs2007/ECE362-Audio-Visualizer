@@ -1,7 +1,5 @@
 #include "eeprom.h"
 
-#include <stdint.h>
-
 #include "hardware/i2c.h"
 #include "pico/stdlib.h"
 
@@ -15,7 +13,6 @@ const uint8_t EEPROM_I2C_ADDR = 0x50; // 7-bit address of the chip on the bus
 const int EEPROM_I2C_HZ = 100000; // standard mode
 const int I2C_TIMEOUT_US = 10000; // stop waiting for a transfer after 10 ms
 const int EEPROM_WRITE_MS = 5; // time the chip needs to finish a write
-const uint8_t SAVED_SPECTRUM = 1; // saved view is 0 for Waveform or 1 for Spectrum
 const uint8_t SAVED_BAND_MIX = 3; // keep the value from older saves
 
 // set up I2C0 on GP4 and GP5, both lines have external pull-ups
@@ -31,18 +28,13 @@ static bool eeprom_read(uint16_t slot, uint8_t *data, int length)
 {
     // the chip wants a two-byte memory address, so slot 2 is sent as 00 02
     const uint8_t address[] = {slot >> 8, slot & 0xff}; // shift the high byte down, then mask to get the low byte
-    const int address_size = sizeof(address); // both address bytes have to get through
 
-    // point the chip at the address without ending the transfer, so we can switch to reading
-    int bytes_written = i2c_write_timeout_us(i2c0, EEPROM_I2C_ADDR, address, address_size,
-                                            true, I2C_TIMEOUT_US);
-    int bytes_read = 0; // stays at zero if we couldn't send the address
-    if(bytes_written == address_size)
-    {
-        // false sends STOP after the last byte
-        bytes_read = i2c_read_timeout_us(i2c0, EEPROM_I2C_ADDR, data, length, false, I2C_TIMEOUT_US);
-    }
-    if(bytes_read != length)
+    // point the chip at the address without ending the transfer (true), so we can switch to reading
+    // the read only runs if both address bytes got through, and false sends STOP after the last byte
+    bool ok = i2c_write_timeout_us(i2c0, EEPROM_I2C_ADDR, address, sizeof(address), true,
+                                   I2C_TIMEOUT_US) == (int)sizeof(address) &&
+              i2c_read_timeout_us(i2c0, EEPROM_I2C_ADDR, data, length, false, I2C_TIMEOUT_US) == length;
+    if(!ok)
     {
         i2c_init(i2c0, EEPROM_I2C_HZ); // reset I2C so we can try again later
         return false;
@@ -64,7 +56,7 @@ bool eeprom_load_choices(bool *show_spectrum, bool *band_mix_on, uint8_t *sensit
         return false;
     }
 
-    *show_spectrum = saved[VIEW_SLOT] == SAVED_SPECTRUM;
+    *show_spectrum = saved[VIEW_SLOT] == 1; // 0 is Waveform, 1 is Spectrum
     *band_mix_on = saved[COLOR_SLOT] == SAVED_BAND_MIX;
     if(saved[SENSITIVITY_SLOT] < SENSITIVITY_LEVEL_COUNT) // a blank chip reads 0xFF, so keep the default
     {
@@ -77,11 +69,10 @@ bool eeprom_load_choices(bool *show_spectrum, bool *band_mix_on, uint8_t *sensit
 static bool eeprom_write_byte(uint16_t slot, uint8_t value)
 {
     const uint8_t packet[] = {slot >> 8, slot & 0xff, value}; // same address split as the read, then the value to store
-    const int packet_size = sizeof(packet); // two address bytes plus the value
     // the EEPROM starts saving when it sees STOP
-    int bytes_written = i2c_write_timeout_us(i2c0, EEPROM_I2C_ADDR, packet, packet_size,
+    int bytes_written = i2c_write_timeout_us(i2c0, EEPROM_I2C_ADDR, packet, sizeof(packet),
                                             false, I2C_TIMEOUT_US);
-    if(bytes_written != packet_size)
+    if(bytes_written != (int)sizeof(packet)) // two address bytes plus the value
     {
         i2c_init(i2c0, EEPROM_I2C_HZ);
         return false;
@@ -96,7 +87,7 @@ static bool eeprom_write_byte(uint16_t slot, uint8_t value)
 // save 0 for Waveform or 1 for Spectrum
 bool eeprom_save_view(bool show_spectrum)
 {
-    return eeprom_write_byte(VIEW_SLOT, show_spectrum ? SAVED_SPECTRUM : 0);
+    return eeprom_write_byte(VIEW_SLOT, show_spectrum); // true is stored as 1, false as 0
 }
 
 // save 0 for Low, 1 for Medium, or 2 for High
