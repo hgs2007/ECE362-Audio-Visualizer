@@ -14,8 +14,8 @@
 #define BAND_COUNT 3 // bass, mids, treble
 
 static const int MIC_GPIO = 40; // mic output from the MAX4466
-static const int MODE_BUTTON_GPIO = 21;
-static const int COLOR_BUTTON_GPIO = 26;
+static const int SELECT_BUTTON_GPIO = 21; // picks which setting is selected
+static const int CHANGE_BUTTON_GPIO = 26; // changes the selected setting
 static const int STATUS_LED_GPIO = 22;
 static const int REPORT_PAUSE_MS = 250; // print mic stats at most four times a second
 static const int FIRST_ADC_GPIO = 40; // start counting ADC inputs at GP40
@@ -43,6 +43,19 @@ static int audio_mean;
 static const int BASS = 0;
 static const int MIDRANGE = 1;
 static const int TREBLE = 2;
+
+// the number of the selected setting is also the EEPROM byte it's saved in
+enum {
+    SETTING_VIEW, // byte 0
+    SETTING_SENSITIVITY, // byte 1
+    SETTING_COLOR, // byte 2
+    SETTING_COUNT
+};
+
+// sensitivity scales how far the waveform and bars move for the same sound
+// Medium keeps the picture the way it looked before sensitivity existed
+static const float SENSITIVITY_GAINS[SENSITIVITY_LEVEL_COUNT] = {0.5f, 1.0f, 2.0f};
+static const char *const SENSITIVITY_NAMES[SENSITIVITY_LEVEL_COUNT] = {"Low", "Medium", "High"};
 
 static const uint8_t band_colors[BAND_COUNT] = {
     RGB_MATRIX_RED, RGB_MATRIX_GREEN, RGB_MATRIX_BLUE,
@@ -90,13 +103,23 @@ static const char *color_name(bool band_mix_on)
     return band_mix_on ? "Band Mix" : "RGB";
 }
 
-// put the button numbers and current choices on the LCD
-static void show_controls(bool show_spectrum, bool band_mix_on)
+// show the selected setting and its value, with a reminder of what each button does
+static void show_controls(int selected, bool show_spectrum, uint8_t sensitivity, bool band_mix_on)
 {
     char top[LCD_COLUMNS + 1]; // one extra byte for the null at the end of the string
-    snprintf(top, sizeof(top), "21 View:%s", mode_name(show_spectrum)); // limit the text to the array size
-    const char *bottom = band_mix_on ? "26 Color:Mix" : "26 Color:RGB"; // keep Band Mix short on the LCD
-    lcd_show_lines(top, bottom);
+    if(selected == SETTING_VIEW)
+    {
+        snprintf(top, sizeof(top), "View:%s", mode_name(show_spectrum)); // limit the text to the array size
+    }
+    else if(selected == SETTING_SENSITIVITY)
+    {
+        snprintf(top, sizeof(top), "Sens:%s", SENSITIVITY_NAMES[sensitivity]);
+    }
+    else
+    {
+        snprintf(top, sizeof(top), "Color:%s", color_name(band_mix_on));
+    }
+    lcd_show_lines(top, "21 Next 26 Edit");
 }
 
 // first 4 bars are bass, next 8 are mids, last 4 are treble
@@ -145,13 +168,14 @@ static uint8_t mix_band_colors(const float amplitudes[SPECTRUM_BAR_COUNT])
 }
 
 // plot every fourth sample so 256 samples fit in 64 columns
-static void draw_waveform(uint8_t mixed)
+static void draw_waveform(uint8_t mixed, float gain)
 {
     for(int x = 0; x < RGB_MATRIX_WIDTH; ++x)
     {
         // columns 0, 1, 2 use samples 0, 4, 8 and so on
         int centered = audio_samples[x * SAMPLES_PER_COLUMN] - audio_mean; // take out the average so the wave sits around zero
-        int offset = centered / ADC_COUNTS_PER_ROW; // 64 counts above average gives a 2-row offset
+        // 64 counts above average gives a 2-row offset at gain 1, and gain 2 doubles that to 4 rows
+        int offset = (int)(centered * gain) / ADC_COUNTS_PER_ROW;
         int row = RGB_MATRIX_HEIGHT / 2 - offset; // positive sound swings go up, so row 16 becomes row 14
         // keep the row index within 0 through 31 even for loud peaks
         if(row < 0)
@@ -248,8 +272,9 @@ static void clear_frame(void)
 }
 
 // use the samples we just got, then start another capture
-static void finish_audio_block(bool show_spectrum, bool band_mix_on)
+static void finish_audio_block(bool show_spectrum, bool band_mix_on, uint8_t sensitivity)
 {
+    float gain = SENSITIVITY_GAINS[sensitivity]; // 0.5, 1, or 2 times the usual size
     // wait before reading the array so we have the full block from DMA
     dma_channel_wait_for_finish_blocking(audio_dma_channel);
     adc_run(false); // stop sampling while we use this block
@@ -262,6 +287,11 @@ static void finish_audio_block(bool show_spectrum, bool band_mix_on)
     if(show_spectrum || band_mix_on)
     {
         spectrum_measure(audio_samples, audio_mean, amplitudes);
+        // scale before drawing or mixing, so sensitivity also moves the noise floor and band colors
+        for(int bar = 0; bar < SPECTRUM_BAR_COUNT; ++bar)
+        {
+            amplitudes[bar] *= gain;
+        }
     }
     uint8_t mixed = band_mix_on ? mix_band_colors(amplitudes) : 0; // zero tells the drawing code to use regular RGB
     if(show_spectrum)
@@ -270,7 +300,7 @@ static void finish_audio_block(bool show_spectrum, bool band_mix_on)
     }
     else
     {
-        draw_waveform(mixed);
+        draw_waveform(mixed, gain);
     }
 
     // set DMA back to the start of the array before turning the ADC back on
@@ -299,6 +329,19 @@ static bool switch_view(bool show_spectrum)
     return show_spectrum; // keep the old choice if the save failed
 }
 
+// move to the next sensitivity level and wrap from High back to Low
+static uint8_t switch_sensitivity(uint8_t sensitivity)
+{
+    uint8_t next_level = (sensitivity + 1) % SENSITIVITY_LEVEL_COUNT;
+    if(eeprom_save_sensitivity(next_level))
+    {
+        printf("Saved sensitivity %s to EEPROM.\n", SENSITIVITY_NAMES[next_level]);
+        return next_level;
+    }
+    puts("Could not save the sensitivity to EEPROM at 0x50.");
+    return sensitivity; // keep the old level if the save failed
+}
+
 // same idea as switching views, but this writes the color slot
 static bool switch_color(bool band_mix_on)
 {
@@ -318,10 +361,10 @@ int main(void)
     stdio_init_all(); // use the debugger UART for logs and the 'm' key
     gpio_init(STATUS_LED_GPIO);
     gpio_set_dir(STATUS_LED_GPIO, GPIO_OUT); // we drive the light ourselves
-    gpio_init(MODE_BUTTON_GPIO);
-    gpio_set_dir(MODE_BUTTON_GPIO, GPIO_IN); // the button drives this pin, we just read it
-    gpio_init(COLOR_BUTTON_GPIO);
-    gpio_set_dir(COLOR_BUTTON_GPIO, GPIO_IN);
+    gpio_init(SELECT_BUTTON_GPIO);
+    gpio_set_dir(SELECT_BUTTON_GPIO, GPIO_IN); // the button drives this pin, we just read it
+    gpio_init(CHANGE_BUTTON_GPIO);
+    gpio_set_dir(CHANGE_BUTTON_GPIO, GPIO_IN);
 
     if(!rgb_matrix_init())
     {
@@ -331,56 +374,85 @@ int main(void)
     eeprom_init();
     bool show_spectrum;
     bool band_mix_on;
-    bool restored = eeprom_load_choices(&show_spectrum, &band_mix_on); // fill both choices and report if the view was saved
-    printf("Mode: %s (%s). 21 switches view, 26 switches color.\n",
+    uint8_t sensitivity;
+    // fill all three choices and report if the view was saved
+    bool restored = eeprom_load_choices(&show_spectrum, &band_mix_on, &sensitivity);
+    printf("Mode: %s (%s). 21 selects a setting, 26 changes it.\n",
            mode_name(show_spectrum), restored ? "loaded from EEPROM" : "default");
+    printf("Sensitivity: %s.\n", SENSITIVITY_NAMES[sensitivity]);
     printf("Color: %s.\n", color_name(band_mix_on));
+    int selected = SETTING_VIEW; // start on the first setting, byte 0
     lcd_init();
-    show_controls(show_spectrum, band_mix_on); // show the choices we started with
+    show_controls(selected, show_spectrum, sensitivity, band_mix_on); // show the choices we started with
 
     spectrum_init(); // build the FFT tables once at startup
     mic_init(); // start filling the first sample block
 
     bool led_on = false;
     // read the starting levels so a button held at startup doesn't count as a new press
-    bool mode_was_down = gpio_get(MODE_BUTTON_GPIO);
-    bool color_was_down = gpio_get(COLOR_BUTTON_GPIO);
+    bool select_was_down = gpio_get(SELECT_BUTTON_GPIO);
+    bool change_was_down = gpio_get(CHANGE_BUTTON_GPIO);
     bool frame_ready = false; // the first block is still being collected
     absolute_time_t next_report = get_absolute_time(); // print as soon as a frame is ready
     while(true)
     {
-        bool mode_down = gpio_get(MODE_BUTTON_GPIO);
-        bool color_down = gpio_get(COLOR_BUTTON_GPIO);
+        bool select_down = gpio_get(SELECT_BUTTON_GPIO);
+        bool change_down = gpio_get(CHANGE_BUTTON_GPIO);
         // a press is low last time and high this time, so holding the button counts once
-        bool mode_pressed = mode_down && !mode_was_down;
-        bool color_pressed = color_down && !color_was_down;
-        mode_was_down = mode_down; // remember these levels for the next loop
-        color_was_down = color_down;
+        bool select_pressed = select_down && !select_was_down;
+        bool change_pressed = change_down && !change_was_down;
+        select_was_down = select_down; // remember these levels for the next loop
+        change_was_down = change_down;
         bool serial_request = getchar_timeout_us(0) == 'm'; // check the key without waiting
 
         // keep the old choices so we can tell which saves actually worked
         bool old_view = show_spectrum;
+        uint8_t old_sensitivity = sensitivity;
         bool old_color = band_mix_on;
-        // the 'm' key does the same thing as pressing the view button
-        if(mode_pressed || serial_request)
+        bool selection_moved = false;
+        // button 21 moves to the next setting: 0 View, 1 Sensitivity, 2 Color, then back to 0
+        if(select_pressed)
+        {
+            selected = (selected + 1) % SETTING_COUNT;
+            selection_moved = true;
+            printf("Selected setting %d.\n", selected);
+        }
+        // button 26 changes whichever setting is selected
+        if(change_pressed)
+        {
+            if(selected == SETTING_VIEW)
+            {
+                show_spectrum = switch_view(show_spectrum);
+            }
+            else if(selected == SETTING_SENSITIVITY)
+            {
+                sensitivity = switch_sensitivity(sensitivity);
+            }
+            else
+            {
+                band_mix_on = switch_color(band_mix_on);
+            }
+        }
+        // the 'm' key still switches the view directly, whichever setting is selected
+        if(serial_request)
         {
             show_spectrum = switch_view(show_spectrum);
         }
-        if(color_pressed)
-        {
-            band_mix_on = switch_color(band_mix_on);
-        }
-        // leave the LCD and picture alone if neither choice changed
-        if(show_spectrum != old_view || band_mix_on != old_color)
+        bool choice_changed = show_spectrum != old_view || sensitivity != old_sensitivity || band_mix_on != old_color;
+        if(choice_changed)
         {
             frame_ready = false; // stop refreshing the picture drawn with the old choices
-            show_controls(show_spectrum, band_mix_on);
+        }
+        // leave the LCD alone if nothing changed
+        if(choice_changed || selection_moved)
+        {
+            show_controls(selected, show_spectrum, sensitivity, band_mix_on);
         }
 
         // once all 256 sample slots are filled, DMA goes idle
         if(!dma_channel_is_busy(audio_dma_channel))
         {
-            finish_audio_block(show_spectrum, band_mix_on);
+            finish_audio_block(show_spectrum, band_mix_on, sensitivity);
             frame_ready = true; // we can scan this picture until the next block finishes
         }
 

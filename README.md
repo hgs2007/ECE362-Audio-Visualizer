@@ -4,8 +4,13 @@ The Proton takes sound from a MAX4466 microphone and draws it on a 64 × 32 RGB 
 
 ## Buttons
 
-- **21** switches between Waveform and Spectrum.
-- **26** switches between RGB and Band Mix, shown as `Mix` on the LCD.
+- **21** selects the next setting, going View, Sensitivity, Color, then back to View. The LCD shows the selected setting and its current value.
+- **26** changes the selected setting:
+  - **View** switches between Waveform and Spectrum.
+  - **Sensitivity** steps through Low, Medium, and High, then wraps around.
+  - **Color** switches between RGB and Band Mix.
+
+Sensitivity scales how far the waveform and the spectrum bars move for the same sound, at 0.5×, 1×, and 2×. Medium is the default and matches how the display looked before sensitivity was added. This is a software scale on the display. The gain knob on the MAX4466 still sets how loud the signal is at the mic.
 
 ## Waveform and mic input
 
@@ -31,6 +36,6 @@ The matrix scans two rows at a time, starting with rows 0 and 16. Each column ne
 
 The LCD uses SPI1. Each transfer is nine bits, with the top bit telling the LCD whether to treat the other eight bits as a command or a character. A command moves the cursor to the start of a line, then the code sends the characters for that line. [`lcd.c`](src/lcd.c)
 
-The EEPROM uses I2C0 on GP4 and GP5. Its bus address is `0x50`. Inside the chip, byte `0` holds the view and byte `2` holds the color. Saving Band Mix sends `00 02 03`. The first two bytes select the memory location and `03` is the value stored there. The code waits 5 ms after the write and reads the byte back before applying the choice.
+The EEPROM uses I2C0 on GP4 and GP5. Its bus address is `0x50`. Inside the chip, byte `0` holds the view, byte `1` holds the sensitivity level (`0` Low, `1` Medium, `2` High), and byte `2` holds the color. The selected setting on the LCD is the same number as its byte. Saving Band Mix sends `00 02 03`. The first two bytes select the memory location and `03` is the value stored there. The code waits 5 ms after the write and reads the byte back before applying the choice.
 
-For a read, the code sends just the two address bytes and uses a repeated START to switch to reading. At power-up it reads the saved choices and uses Waveform and RGB as defaults. [`eeprom.c`](src/eeprom.c)
+For a read, the code sends just the two address bytes and uses a repeated START to switch to reading. At power-up it reads the saved choices and uses Waveform, Medium, and RGB as defaults. A blank chip reads `0xFF` in byte 1, which isn't a valid level, so it falls back to Medium. [`eeprom.c`](src/eeprom.c)

@@ -6,16 +6,17 @@
 #include "pico/stdlib.h"
 
 #define VIEW_SLOT 0 // first byte in the chip holds the view
-#define COLOR_SLOT 2 // byte 1 used to hold gain
+#define SENSITIVITY_SLOT 1 // second byte holds the mic sensitivity level
+#define COLOR_SLOT 2 // third byte holds the color
 
-static const int EEPROM_SDA_GPIO = 4;
-static const int EEPROM_SCL_GPIO = 5;
-static const uint8_t EEPROM_I2C_ADDR = 0x50; // 7-bit address of the chip on the bus
-static const int EEPROM_I2C_HZ = 100000; // standard mode
-static const int I2C_TIMEOUT_US = 10000; // stop waiting for a transfer after 10 ms
-static const int EEPROM_WRITE_MS = 5; // time the chip needs to finish a write
-static const uint8_t SAVED_SPECTRUM = 1; // saved view is 0 for Waveform or 1 for Spectrum
-static const uint8_t SAVED_BAND_MIX = 3; // keep the value from older saves
+const int EEPROM_SDA_GPIO = 4;
+const int EEPROM_SCL_GPIO = 5;
+const uint8_t EEPROM_I2C_ADDR = 0x50; // 7-bit address of the chip on the bus
+const int EEPROM_I2C_HZ = 100000; // standard mode
+const int I2C_TIMEOUT_US = 10000; // stop waiting for a transfer after 10 ms
+const int EEPROM_WRITE_MS = 5; // time the chip needs to finish a write
+const uint8_t SAVED_SPECTRUM = 1; // saved view is 0 for Waveform or 1 for Spectrum
+const uint8_t SAVED_BAND_MIX = 3; // keep the value from older saves
 
 // set up I2C0 on GP4 and GP5, both lines have external pull-ups
 void eeprom_init(void)
@@ -50,13 +51,14 @@ static bool eeprom_read(uint16_t slot, uint8_t *data, int length)
     return true;
 }
 
-// start with Waveform and RGB and check for saved choices
+// start with Waveform, Medium sensitivity, and RGB, then check for saved choices
 // return true if the saved view is valid
-bool eeprom_load_choices(bool *show_spectrum, bool *band_mix_on)
+bool eeprom_load_choices(bool *show_spectrum, bool *band_mix_on, uint8_t *sensitivity)
 {
     *show_spectrum = false; // default to Waveform if the read fails
+    *sensitivity = SENSITIVITY_DEFAULT; // default to Medium if the read fails
     *band_mix_on = false; // default to RGB if the read fails
-    uint8_t saved[COLOR_SLOT + 1]; // read three bytes to reach slot 2, even though we skip slot 1
+    uint8_t saved[COLOR_SLOT + 1]; // read bytes 0, 1, and 2 in one transfer
     if(!eeprom_read(VIEW_SLOT, saved, sizeof(saved)))
     {
         return false;
@@ -64,6 +66,10 @@ bool eeprom_load_choices(bool *show_spectrum, bool *band_mix_on)
 
     *show_spectrum = saved[VIEW_SLOT] == SAVED_SPECTRUM;
     *band_mix_on = saved[COLOR_SLOT] == SAVED_BAND_MIX;
+    if(saved[SENSITIVITY_SLOT] < SENSITIVITY_LEVEL_COUNT) // a blank chip reads 0xFF, so keep the default
+    {
+        *sensitivity = saved[SENSITIVITY_SLOT];
+    }
     return saved[VIEW_SLOT] == 0 || *show_spectrum; // only 0 and 1 count as a saved view
 }
 
@@ -91,6 +97,16 @@ static bool eeprom_write_byte(uint16_t slot, uint8_t value)
 bool eeprom_save_view(bool show_spectrum)
 {
     return eeprom_write_byte(VIEW_SLOT, show_spectrum ? SAVED_SPECTRUM : 0);
+}
+
+// save 0 for Low, 1 for Medium, or 2 for High
+bool eeprom_save_sensitivity(uint8_t sensitivity)
+{
+    if(sensitivity >= SENSITIVITY_LEVEL_COUNT)
+    {
+        return false; // don't store a level the load code would ignore
+    }
+    return eeprom_write_byte(SENSITIVITY_SLOT, sensitivity);
 }
 
 // save 0 for RGB or 3 for Band Mix
