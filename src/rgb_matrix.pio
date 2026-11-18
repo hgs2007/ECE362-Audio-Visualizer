@@ -1,12 +1,12 @@
-// the PIO runs these small programs to drive the panel pins while C sends data
+// drive panel pins
 // the first program sends color bits, the second one lights the selected rows
 .program rgb_matrix_columns // program name for the C code
 .side_set 1 // side 0 drives CLK low, side 1 drives it high
-.wrap_target // the program comes back here after it finishes a row pair
-    set x, 31 side 0 // x is our counter, 31 down to 0 gives us 32 loops
+.wrap_target // wrap to next row after finishing current
+    set x, 31 side 0 // initialize x as counter, 31 down to 0 gives us 32 loops
 shift_two_columns: // name for the spot we jump back to
     // each word from C has two columns, so 32 loops send all 64 columns
-    pull block side 0 // wait for C to put a word in the FIFO, the queue of words to send
+    pull block side 0 // wait for C to put a word in the FIFO
     out pins, 6 side 0 // put the first column's RGB bits on the pins, three for each row
     nop side 1 // keep those bits in place and raise CLK so the panel reads them
     out pins, 6 side 0 // drop CLK and put the second column's bits on the pins
